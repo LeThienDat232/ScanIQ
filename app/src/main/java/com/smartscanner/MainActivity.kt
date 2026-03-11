@@ -4,15 +4,21 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +26,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -40,11 +47,11 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -133,6 +140,7 @@ private fun SmartScannerApp() {
             onTabSelected = { selectedTab = it },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
                 .padding(horizontal = 18.dp, vertical = 10.dp)
         )
     }
@@ -231,7 +239,9 @@ private fun ToolsScreen() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 72.dp, bottom = 110.dp)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(top = 20.dp, bottom = 110.dp)
         ) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -257,7 +267,9 @@ private fun OptionsScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(PageBackground),
+            .background(PageBackground)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -271,23 +283,22 @@ private fun OptionsScreen() {
 
 @Composable
 private fun BlueHeader(showShortcuts: Boolean) {
-    val headerHeight = if (showShortcuts) 230.dp else 150.dp
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(headerHeight)
             .background(AppBlue)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 22.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+                .padding(top = 35.dp, bottom = 30.dp, start = 22.dp, end = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             SearchPill()
             if (showShortcuts) {
+                Spacer(modifier = Modifier.height(25.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -564,70 +575,90 @@ private fun BottomNavDock(
     onTabSelected: (BottomTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(86.dp),
+    val tabs = BottomTab.values()
+    
+    BoxWithConstraints(
+        modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.BottomCenter
     ) {
+        val fullWidth = maxWidth
+        val spacerWidth = 60.dp
+        val itemSlotWidth = (fullWidth - spacerWidth) / 4
+        
+        val indicatorOffset by animateDpAsState(
+            targetValue = when (tabs.indexOf(selectedTab)) {
+                0 -> 0.dp
+                1 -> itemSlotWidth
+                2 -> itemSlotWidth * 2 + spacerWidth
+                3 -> itemSlotWidth * 3 + spacerWidth
+                else -> 0.dp
+            },
+            animationSpec = tween(durationMillis = 300)
+        )
+
+        // Bottom bar surface
         Surface(
             color = BottomDockColor,
-            shape = RoundedCornerShape(34.dp),
+            shape = RoundedCornerShape(36.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
+                .height(82.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                BottomNavItem(
-                    tab = BottomTab.Home,
-                    icon = Icons.Outlined.Home,
-                    selected = selectedTab == BottomTab.Home,
-                    onTabSelected = onTabSelected
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Sliding Animated Background
+                Box(
+                    modifier = Modifier
+                        .offset(x = indicatorOffset)
+                        .width(itemSlotWidth)
+                        .fillMaxHeight()
+                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                        .clip(RoundedCornerShape(32.dp))
+                        .background(AppBlue)
                 )
-                BottomNavItem(
-                    tab = BottomTab.Files,
-                    icon = Icons.Outlined.Folder,
-                    selected = selectedTab == BottomTab.Files,
-                    onTabSelected = onTabSelected
-                )
-                Spacer(modifier = Modifier.width(56.dp))
-                BottomNavItem(
-                    tab = BottomTab.Tools,
-                    icon = Icons.Outlined.Build,
-                    selected = selectedTab == BottomTab.Tools,
-                    onTabSelected = onTabSelected
-                )
-                BottomNavItem(
-                    tab = BottomTab.Options,
-                    icon = Icons.Outlined.Settings,
-                    selected = selectedTab == BottomTab.Options,
-                    onTabSelected = onTabSelected
-                )
+
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Home
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        BottomNavItem(tabs[0], Icons.Outlined.Home, selectedTab == tabs[0], onTabSelected)
+                    }
+                    // Files
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        BottomNavItem(tabs[1], Icons.Outlined.Folder, selectedTab == tabs[1], onTabSelected)
+                    }
+                    
+                    Spacer(modifier = Modifier.width(spacerWidth))
+
+                    // Tools
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        BottomNavItem(tabs[2], Icons.Outlined.Build, selectedTab == tabs[2], onTabSelected)
+                    }
+                    // Options
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        BottomNavItem(tabs[3], Icons.Outlined.Settings, selectedTab == tabs[3], onTabSelected)
+                    }
+                }
             }
         }
 
+        // FAB
         Surface(
             color = AppBlue,
             shape = CircleShape,
-            shadowElevation = 6.dp,
             modifier = Modifier
-                .size(60.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = (-4).dp)
-                .clickable { }
+                .size(68.dp)
+                .offset(y = (-40).dp)
+                .clickable { /* action */ },
+            shadowElevation = 8.dp
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Rounded.Add,
                     contentDescription = "Add",
                     tint = Color.White,
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(38.dp)
                 )
             }
         }
@@ -641,35 +672,30 @@ private fun BottomNavItem(
     selected: Boolean,
     onTabSelected: (BottomTab) -> Unit,
 ) {
-    val background = if (selected) AppBlue else Color.Transparent
-    val iconColor = if (selected) Color.White else Color(0xFF2B2B2B)
-    val textColor = if (selected) Color.White else AppBlue
+    val iconColor by animateColorAsState(if (selected) Color.White else Color.Black)
+    val textColor by animateColorAsState(if (selected) Color.White else AppBlue)
 
-    Box(
+    Column(
         modifier = Modifier
-            .width(if (selected) 84.dp else 68.dp)
-            .height(48.dp)
-            .clip(RoundedCornerShape(26.dp))
-            .background(background)
-            .clickable { onTabSelected(tab) },
-        contentAlignment = Alignment.Center
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onTabSelected(tab) }
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = tab.label,
-                tint = iconColor,
-                modifier = Modifier.size(20.dp)
-            )
-            Text(
-                text = tab.label,
-                color = textColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = tab.label,
+            tint = iconColor,
+            modifier = Modifier.size(24.dp)
+        )
+        Text(
+            text = tab.label,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
