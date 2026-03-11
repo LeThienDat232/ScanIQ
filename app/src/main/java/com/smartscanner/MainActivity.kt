@@ -575,7 +575,7 @@ private fun BottomNavDock(
     onTabSelected: (BottomTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val tabs = BottomTab.values()
+    val tabs = BottomTab.entries
     
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
