@@ -581,19 +581,17 @@ private fun BottomNavDock(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.BottomCenter
     ) {
-        val fullWidth = maxWidth
+        val fullWidth = this.maxWidth
         val spacerWidth = 60.dp
         val itemSlotWidth = (fullWidth - spacerWidth) / 4
         
+        val selectedIndex = tabs.indexOf(selectedTab)
         val indicatorOffset by animateDpAsState(
-            targetValue = when (tabs.indexOf(selectedTab)) {
-                0 -> 0.dp
-                1 -> itemSlotWidth
-                2 -> itemSlotWidth * 2 + spacerWidth
-                3 -> itemSlotWidth * 3 + spacerWidth
-                else -> 0.dp
+            targetValue = when {
+                selectedIndex < 2 -> itemSlotWidth * selectedIndex
+                else -> itemSlotWidth * selectedIndex + spacerWidth
             },
-            animationSpec = tween(durationMillis = 300)
+            animationSpec = tween(durationMillis = 350)
         )
 
         // Bottom bar surface
@@ -605,13 +603,13 @@ private fun BottomNavDock(
                 .height(82.dp)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Sliding Animated Background
+                // Sliding Animated Background (Wider Pill)
                 Box(
                     modifier = Modifier
                         .offset(x = indicatorOffset)
                         .width(itemSlotWidth)
                         .fillMaxHeight()
-                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                        .padding(horizontal = 2.dp, vertical = 10.dp)
                         .clip(RoundedCornerShape(32.dp))
                         .background(AppBlue)
                 )
@@ -620,24 +618,25 @@ private fun BottomNavDock(
                     modifier = Modifier.fillMaxSize(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Home
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        BottomNavItem(tabs[0], Icons.Outlined.Home, selectedTab == tabs[0], onTabSelected)
-                    }
-                    // Files
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        BottomNavItem(tabs[1], Icons.Outlined.Folder, selectedTab == tabs[1], onTabSelected)
-                    }
-                    
-                    Spacer(modifier = Modifier.width(spacerWidth))
-
-                    // Tools
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        BottomNavItem(tabs[2], Icons.Outlined.Build, selectedTab == tabs[2], onTabSelected)
-                    }
-                    // Options
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        BottomNavItem(tabs[3], Icons.Outlined.Settings, selectedTab == tabs[3], onTabSelected)
+                    tabs.forEachIndexed { index, tab ->
+                        if (index == 2) {
+                            Spacer(modifier = Modifier.width(spacerWidth))
+                        }
+                        
+                        val icon = when (tab) {
+                            BottomTab.Home -> Icons.Outlined.Home
+                            BottomTab.Files -> Icons.Outlined.Folder
+                            BottomTab.Tools -> Icons.Outlined.Build
+                            BottomTab.Options -> Icons.Outlined.Settings
+                        }
+                        
+                        BottomNavItem(
+                            tab = tab,
+                            icon = icon,
+                            selected = selectedTab == tab,
+                            onTabSelected = onTabSelected,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             }
@@ -671,12 +670,14 @@ private fun BottomNavItem(
     icon: ImageVector,
     selected: Boolean,
     onTabSelected: (BottomTab) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val iconColor by animateColorAsState(if (selected) Color.White else Color.Black)
     val textColor by animateColorAsState(if (selected) Color.White else AppBlue)
 
     Column(
-        modifier = Modifier
+        modifier = modifier
+            .fillMaxHeight()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -689,7 +690,7 @@ private fun BottomNavItem(
             imageVector = icon,
             contentDescription = tab.label,
             tint = iconColor,
-            modifier = Modifier.size(24.dp)
+            modifier = Modifier.size(26.dp)
         )
         Text(
             text = tab.label,
