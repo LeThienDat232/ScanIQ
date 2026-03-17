@@ -4,30 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -35,29 +17,21 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.CreateNewFolder
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.ImageSearch
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -86,7 +60,6 @@ fun SmartScannerPreview() {
 
 private val AppBlue = Color(0xFF3367EF)
 private val PageBackground = Color(0xFFF1F1F1)
-private val BottomDockColor = Color(0xFFE7E7E7)
 
 private enum class BottomTab(val label: String) {
     Home("Home"),
@@ -96,16 +69,14 @@ private enum class BottomTab(val label: String) {
 }
 
 private enum class ExplorerType {
-    Folder,
-    Png,
-    Xls,
-    Csv,
+    Folder, Png, Xls, Csv, Pdf, Doc, Ppt,
 }
 
 private data class RecentFile(
     val title: String,
     val date: String,
-    val highlighted: Boolean,
+    val type: ExplorerType,
+    val highlighted: Boolean = false,
 )
 
 private data class ExplorerItem(
@@ -116,7 +87,9 @@ private data class ExplorerItem(
 
 private data class ToolItem(
     val title: String,
-    val highlighted: Boolean = false,
+    val icon: ImageVector,
+    val description: String,
+    val color: Color = AppBlue
 )
 
 @Composable
@@ -128,92 +101,83 @@ private fun SmartScannerApp() {
             .fillMaxSize()
             .background(PageBackground)
     ) {
-        when (selectedTab) {
-            BottomTab.Home -> HomeScreen()
-            BottomTab.Files -> FilesScreen()
-            BottomTab.Tools -> ToolsScreen()
-            BottomTab.Options -> OptionsScreen()
+        AnimatedContent(
+            targetState = selectedTab,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(400)) togetherWith fadeOut(animationSpec = tween(400))
+            },
+            label = "pageTransition"
+        ) { targetTab ->
+            when (targetTab) {
+                BottomTab.Home -> HomeScreen()
+                BottomTab.Files -> FilesScreen()
+                BottomTab.Tools -> ToolsScreen()
+                BottomTab.Options -> OptionsScreen()
+            }
         }
 
-        BottomNavDock(
-            selectedTab = selectedTab,
-            onTabSelected = { selectedTab = it },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp)
-        )
+        Box(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) {
+            BottomNavDock(
+                selectedTab = selectedTab,
+                onTabSelected = { selectedTab = it },
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+        }
     }
 }
 
 @Composable
 private fun HomeScreen() {
-    val files = List(9) { index ->
-        RecentFile(
-            title = "Database design",
-            date = "13:29 22/12/2025",
-            highlighted = index == 0
-        )
-    }
+    val recentFiles = listOf(
+        RecentFile("Final_project_final_version_v2.pdf", "13:29 22/12/2025", ExplorerType.Pdf),
+        RecentFile("Dataset_2024_comprehensive.csv", "10:15 21/12/2025", ExplorerType.Csv),
+        RecentFile("Business_plan_internal.doc", "16:45 20/12/2025", ExplorerType.Doc),
+        RecentFile("Financial_report_Q4.xls", "09:30 19/12/2025", ExplorerType.Xls),
+        RecentFile("Scanner_result_001.png", "11:05 17/12/2025", ExplorerType.Png),
+        RecentFile("Meeting_notes.pdf", "14:20 16/12/2025", ExplorerType.Pdf),
+        RecentFile("Icon_export.png", "08:15 15/12/2025", ExplorerType.Png),
+        RecentFile("Invoice_2025.xls", "17:40 14/12/2025", ExplorerType.Xls),
+    )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PageBackground)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            BlueHeader(showShortcuts = false)
-            Text(
-                text = "Recent files",
-                color = Color(0xFF101010),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(start = 24.dp, top = 10.dp, bottom = 6.dp)
-            )
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 110.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(files.size) { index ->
-                    RecentFileRow(file = files[index])
-                }
+    Column(modifier = Modifier.fillMaxSize()) {
+        BlueHeader(showShortcuts = false)
+        Text(
+            text = "Recent files",
+            color = Color(0xFF101010),
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = 24.dp, top = 10.dp, bottom = 6.dp)
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(recentFiles.size) { index ->
+                RecentFileRow(file = recentFiles[index])
             }
         }
-
     }
 }
 
 @Composable
 private fun FilesScreen() {
     val items = listOf(
-        ExplorerItem("Database design", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("Data mining", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("Data structure\nand algorithm", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("Database\nimage.png", "13:29 22/12/2025", ExplorerType.Png),
-        ExplorerItem("Database.xls", "13:29 22/12/2025", ExplorerType.Xls),
-        ExplorerItem("Database.csv", "13:29 22/12/2025", ExplorerType.Csv),
-        ExplorerItem("Database design", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("Database design", "13:29 22/12/2025", ExplorerType.Folder),
+        ExplorerItem("Projects", "13:29 22/12/2025", ExplorerType.Folder),
+        ExplorerItem("Documents", "13:29 22/12/2025", ExplorerType.Folder),
+        ExplorerItem("resume_cv.pdf", "13:29 22/12/2025", ExplorerType.Pdf),
+        ExplorerItem("budget_2025.xls", "13:29 22/12/2025", ExplorerType.Xls),
+        ExplorerItem("photo_scan.png", "13:29 22/12/2025", ExplorerType.Png),
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PageBackground)
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
         BlueHeader(showShortcuts = true)
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 28.dp,
-                end = 28.dp,
-                top = 24.dp,
-                bottom = 110.dp
-            ),
-            horizontalArrangement = Arrangement.spacedBy(26.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 140.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             items(items) { item ->
                 ExplorerGridItem(item = item)
@@ -225,69 +189,44 @@ private fun FilesScreen() {
 @Composable
 private fun ToolsScreen() {
     val toolItems = listOf(
-        ToolItem("Text extract", highlighted = true),
-        ToolItem("Image edit"),
-        ToolItem("PDF export"),
-        ToolItem("File cleaner"),
+        ToolItem("Text Extract", Icons.Outlined.Description, "Convert images to editable text"),
+        ToolItem("Text Summarization", Icons.Outlined.Summarize, "AI-powered doc summary", color = Color(0xFFEF5350)),
+        ToolItem("Image Edit", Icons.Outlined.Edit, "Crop and filter images"),
+        ToolItem("PDF Export", Icons.Outlined.PictureAsPdf, "Save as high quality PDF"),
+        ToolItem("File Cleaner", Icons.Outlined.CleaningServices, "Optimize storage"),
+        ToolItem("Smart Search", Icons.Outlined.AutoAwesome, "Find text in images"),
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PageBackground)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(top = 20.dp, bottom = 110.dp)
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(top = 20.dp, bottom = 110.dp)) {
+        Text(
+            text = "Magic Tools",
+            color = Color(0xFF101010),
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+        )
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier
-                    .height(310.dp)
-                    .padding(horizontal = 72.dp),
-                userScrollEnabled = false,
-                horizontalArrangement = Arrangement.spacedBy(40.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp)
-            ) {
-                items(toolItems) { item ->
-                    ToolCard(item = item)
-                }
-            }
-            Spacer(modifier = Modifier.weight(1f))
+            items(toolItems) { item -> ToolCard(item = item) }
         }
-
     }
 }
 
 @Composable
 private fun OptionsScreen() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PageBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "Options",
-            color = Color(0xFF202020),
-            fontSize = 28.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+    Box(modifier = Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.Center) {
+        Text(text = "Options", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
 private fun BlueHeader(showShortcuts: Boolean) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(AppBlue)
-    ) {
+    Box(modifier = Modifier.fillMaxWidth().background(AppBlue)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -299,27 +238,12 @@ private fun BlueHeader(showShortcuts: Boolean) {
             SearchPill()
             if (showShortcuts) {
                 Spacer(modifier = Modifier.height(25.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    ShortcutButton(
-                        icon = Icons.Outlined.UploadFile,
-                        label = "Upload file",
-                        modifier = Modifier.weight(1f)
-                    )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    ShortcutButton(Icons.Outlined.UploadFile, "Upload file", Modifier.weight(1f))
+                    Spacer(Modifier.width(14.dp))
+                    ShortcutButton(Icons.Outlined.ImageSearch, "Upload image", Modifier.weight(1f))
                     Spacer(modifier = Modifier.width(14.dp))
-                    ShortcutButton(
-                        icon = Icons.Outlined.ImageSearch,
-                        label = "Upload image",
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    ShortcutButton(
-                        icon = Icons.Outlined.CreateNewFolder,
-                        label = "Create folder",
-                        modifier = Modifier.weight(1f)
-                    )
+                    ShortcutButton(Icons.Outlined.CreateNewFolder, "Create folder", Modifier.weight(1f))
                 }
             }
         }
@@ -328,375 +252,195 @@ private fun BlueHeader(showShortcuts: Boolean) {
 
 @Composable
 private fun SearchPill() {
-    Surface(
-        color = Color(0xFFF6F6F6),
-        shape = RoundedCornerShape(30.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Search,
-                contentDescription = "Search",
-                tint = Color(0xFF171717),
-                modifier = Modifier.size(30.dp)
-            )
+    Surface(color = Color(0xFFF6F6F6), shape = RoundedCornerShape(30.dp), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Search, null, tint = Color(0xFF171717), modifier = Modifier.size(30.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Search for any file!",
-                color = Color(0xFF171717),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium
-            )
+            Text("Search for any file!", color = Color(0xFF171717), fontSize = 18.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
 
 @Composable
-private fun ShortcutButton(
-    icon: ImageVector,
-    label: String,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        color = Color(0xFFF4F4F4),
-        shape = RoundedCornerShape(22.dp),
-        modifier = modifier.height(104.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = AppBlue,
-                modifier = Modifier.size(44.dp)
-            )
-            Text(
-                text = label,
-                color = AppBlue,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+private fun ShortcutButton(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
+    Surface(color = Color(0xFFF4F4F4), shape = RoundedCornerShape(22.dp), modifier = modifier.height(104.dp)) {
+        Column(modifier = Modifier.fillMaxSize().padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+            Icon(icon, null, tint = AppBlue, modifier = Modifier.size(44.dp))
+            Text(label, color = AppBlue, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 @Composable
 private fun RecentFileRow(file: RecentFile) {
-    val borderModifier = if (file.highlighted) {
-        Modifier.border(2.dp, AppBlue, RoundedCornerShape(1.dp))
-    } else {
-        Modifier
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(borderModifier)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .background(Color(0xFFD7D7D7))
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = file.title,
-                color = Color(0xFF1A1A1A),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = file.date,
-                color = Color(0xFF242424),
-                fontSize = 12.sp
-            )
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(80.dp).scale(0.8f), contentAlignment = Alignment.Center) {
+            FileOrFolderIcon(file.type)
         }
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .border(1.5.dp, Color(0xFF494949))
-        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(file.title, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(file.date, color = Color.Gray, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(20.dp))
+        Box(Modifier.size(22.dp).border(1.5.dp, Color.Gray))
     }
 }
 
 @Composable
 private fun ExplorerGridItem(item: ExplorerItem) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        when (item.type) {
-            ExplorerType.Folder -> FolderGlyph()
-            ExplorerType.Png -> FileGlyph("PNG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
-            ExplorerType.Xls -> FileGlyph("XLS", Color(0xFF3DBA7C), Color(0xFF188D56), Color(0xFF127A48))
-            ExplorerType.Csv -> FileGlyph("CSV", Color(0xFF58A8E2), Color(0xFF2A73BA), Color(0xFF2163A6))
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(modifier = Modifier.height(120.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(Modifier.scale(0.9f)) { FileOrFolderIcon(item.type) }
         }
-        Text(
-            text = item.title,
-            color = Color(0xFF1A1A1A),
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 18.sp,
-            modifier = Modifier.padding(top = 8.dp),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = item.date,
-            color = Color(0xFF252525),
-            fontSize = 12.sp
-        )
+        Spacer(Modifier.height(8.dp))
+        Text(item.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(item.date, color = Color.Gray, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun FileOrFolderIcon(type: ExplorerType) {
+    when (type) {
+        ExplorerType.Folder -> FolderGlyph()
+        ExplorerType.Png -> FileGlyph("PNG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
+        ExplorerType.Xls -> FileGlyph("XLS", Color(0xFF3DBA7C), Color(0xFF188D56), Color(0xFF127A48))
+        ExplorerType.Csv -> FileGlyph("CSV", Color(0xFF58A8E2), Color(0xFF2A73BA), Color(0xFF2163A6))
+        ExplorerType.Pdf -> FileGlyph("PDF", Color(0xFFE57373), Color(0xFFC62828), Color(0xFFB71C1C))
+        ExplorerType.Doc -> FileGlyph("DOC", Color(0xFF64B5F6), Color(0xFF1976D2), Color(0xFF0D47A1))
+        ExplorerType.Ppt -> FileGlyph("PPT", Color(0xFFFFB74D), Color(0xFFF57C00), Color(0xFFE65100))
     }
 }
 
 @Composable
 private fun FolderGlyph() {
-    Box(
-        modifier = Modifier
-            .width(122.dp)
-            .height(88.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .width(42.dp)
-                .height(14.dp)
-                .offset(x = 14.dp, y = 4.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFFF4AE21))
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(72.dp)
-                .align(Alignment.BottomStart)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFFEFCB55))
-        )
+    Box(Modifier.width(115.dp).height(90.dp)) {
+        Box(Modifier.width(45.dp).height(16.dp).offset(12.dp, 4.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFFF4AE21)))
+        Box(Modifier.fillMaxWidth().height(76.dp).align(Alignment.BottomStart).clip(RoundedCornerShape(10.dp)).background(Color(0xFFEFCB55)))
     }
 }
 
 @Composable
-private fun FileGlyph(
-    label: String,
-    bodyColor: Color,
-    foldColor: Color,
-    stripColor: Color,
-) {
-    Box(
-        modifier = Modifier
-            .width(92.dp)
-            .height(108.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(10.dp))
-                .background(bodyColor)
-        )
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .align(Alignment.TopEnd)
-                .clip(RoundedCornerShape(bottomStart = 4.dp))
-                .background(foldColor)
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .width(84.dp)
-                .height(32.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(stripColor),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = label,
-                color = Color.White,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold
-            )
+private fun FileGlyph(label: String, bodyColor: Color, foldColor: Color, stripColor: Color) {
+    Box(Modifier.width(80.dp).height(100.dp)) {
+        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(bodyColor))
+        Box(Modifier.size(20.dp).align(Alignment.TopEnd).clip(RoundedCornerShape(bottomStart = 4.dp)).background(foldColor))
+        Box(Modifier.align(Alignment.Center).width(72.dp).height(28.dp).clip(RoundedCornerShape(4.dp)).background(stripColor), contentAlignment = Alignment.Center) {
+            Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
 private fun ToolCard(item: ToolItem) {
-    val borderModifier = if (item.highlighted) {
-        Modifier.border(2.dp, AppBlue)
-    } else {
-        Modifier
-    }
-
-    Column(
-        modifier = Modifier
-            .then(borderModifier)
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(90.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(AppBlue),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.UploadFile,
-                contentDescription = item.title,
-                tint = Color.White,
-                modifier = Modifier.size(48.dp)
-            )
+    Surface(color = Color.White, shape = RoundedCornerShape(24.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth().height(180.dp).clickable {}) {
+        Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+            Box(Modifier.size(60.dp).clip(CircleShape).background(item.color.copy(0.1f)), contentAlignment = Alignment.Center) {
+                Icon(item.icon, null, tint = item.color, modifier = Modifier.size(32.dp))
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(item.title, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Text(item.description, color = Color.Gray, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2)
+            }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = item.title,
-            color = Color.Black,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-        )
     }
 }
 
 @Composable
-private fun BottomNavDock(
-    selectedTab: BottomTab,
-    onTabSelected: (BottomTab) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val tabs = BottomTab.entries
-    
-    BoxWithConstraints(
-        modifier = modifier.fillMaxWidth(),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        val fullWidth = this.maxWidth
-        val spacerWidth = 60.dp
-        val itemSlotWidth = (fullWidth - spacerWidth) / 4
-        
-        val selectedIndex = tabs.indexOf(selectedTab)
-        val indicatorOffset by animateDpAsState(
-            targetValue = when {
-                selectedIndex < 2 -> itemSlotWidth * selectedIndex
-                else -> itemSlotWidth * selectedIndex + spacerWidth
-            },
-            animationSpec = tween(durationMillis = 350)
-        )
+private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
+    val tabs = BottomTab.values()
+    val selectedIndex = tabs.indexOf(selectedTab)
 
-        // Bottom bar surface
-        Surface(
-            color = BottomDockColor,
-            shape = RoundedCornerShape(36.dp),
+    Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(82.dp)
+                .height(76.dp)
+                .background(Color.White.copy(alpha = 0.75f), RoundedCornerShape(32.dp))
+                .border(0.5.dp, Color.Black.copy(alpha = 0.05f), RoundedCornerShape(32.dp))
+                .clip(RoundedCornerShape(32.dp))
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                // Sliding Animated Background (Wider Pill)
-                Box(
-                    modifier = Modifier
-                        .offset(x = indicatorOffset)
-                        .width(itemSlotWidth)
-                        .fillMaxHeight()
-                        .padding(horizontal = 2.dp, vertical = 10.dp)
-                        .clip(RoundedCornerShape(32.dp))
-                        .background(AppBlue)
-                )
+            val totalWidth = maxWidth
+            val spacerWidth = 64.dp
+            val tabWidth = (totalWidth - spacerWidth) / 4
+            
+            // 1. Tính toán vị trí X của Indicator trượt
+            val indicatorOffset by animateDpAsState(
+                targetValue = when (selectedIndex) {
+                    0 -> 0.dp
+                    1 -> tabWidth
+                    2 -> tabWidth * 2 + spacerWidth
+                    3 -> tabWidth * 3 + spacerWidth
+                    else -> 0.dp
+                },
+                // Animation spring cho cảm giác lướt tự nhiên giống iOS
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow),
+                label = "indicatorOffset"
+            )
 
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    tabs.forEachIndexed { index, tab ->
-                        if (index == 2) {
-                            Spacer(modifier = Modifier.width(spacerWidth))
-                        }
-                        
-                        val icon = when (tab) {
-                            BottomTab.Home -> Icons.Outlined.Home
-                            BottomTab.Files -> Icons.Outlined.Folder
-                            BottomTab.Tools -> Icons.Outlined.Build
-                            BottomTab.Options -> Icons.Outlined.Settings
-                        }
-                        
-                        BottomNavItem(
-                            tab = tab,
-                            icon = icon,
-                            selected = selectedTab == tab,
-                            onTabSelected = onTabSelected,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
+            // 2. Nền xanh trượt (Sliding Indicator) - Cao bằng đúng thanh Dock
+            Box(
+                modifier = Modifier
+                    .offset(x = indicatorOffset)
+                    .width(tabWidth)
+                    .fillMaxHeight()
+                    .background(AppBlue)
+            )
+
+            Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                BottomNavItem(BottomTab.Home, Icons.Outlined.Home, selectedTab == BottomTab.Home, onTabSelected, Modifier.weight(1f))
+                BottomNavItem(BottomTab.Files, Icons.Outlined.Folder, selectedTab == BottomTab.Files, onTabSelected, Modifier.weight(1f))
+                
+                Spacer(modifier = Modifier.width(64.dp))
+
+                BottomNavItem(BottomTab.Tools, Icons.Outlined.Build, selectedTab == BottomTab.Tools, onTabSelected, Modifier.weight(1f))
+                BottomNavItem(BottomTab.Options, Icons.Outlined.Settings, selectedTab == BottomTab.Options, onTabSelected, Modifier.weight(1f))
             }
         }
-
-        // FAB
-        Surface(
-            color = AppBlue,
-            shape = CircleShape,
+        
+        Box(
             modifier = Modifier
-                .size(68.dp)
-                .offset(y = (-40).dp)
-                .clickable { /* action */ },
-            shadowElevation = 8.dp
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = "Add",
-                    tint = Color.White,
-                    modifier = Modifier.size(38.dp)
-                )
-            }
+                .size(64.dp)
+                .offset(y = (-32).dp)
+                .shadow(elevation = 10.dp, shape = CircleShape)
+                .background(AppBlue, CircleShape)
+                .clip(CircleShape)
+                .clickable { },
+            contentAlignment = Alignment.Center
+        ) { 
+            Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(36.dp)) 
         }
     }
 }
 
 @Composable
-private fun BottomNavItem(
-    tab: BottomTab,
-    icon: ImageVector,
-    selected: Boolean,
-    onTabSelected: (BottomTab) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val iconColor by animateColorAsState(if (selected) Color.White else Color.Black)
-    val textColor by animateColorAsState(if (selected) Color.White else AppBlue)
-
-    Column(
+private fun BottomNavItem(tab: BottomTab, icon: ImageVector, selected: Boolean, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
+    // Chỉ animate màu của nội dung (Icon/Text) để hòa quyện với Indicator trượt
+    val animatedContentColor by animateColorAsState(
+        targetValue = if (selected) Color.White else Color.Black.copy(alpha = 0.6f),
+        animationSpec = tween(300),
+        label = "contentColor"
+    )
+    
+    Box(
         modifier = modifier
             .fillMaxHeight()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onTabSelected(tab) }
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .clickable { onTabSelected(tab) },
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = tab.label,
-            tint = iconColor,
-            modifier = Modifier.size(26.dp)
-        )
-        Text(
-            text = tab.label,
-            color = textColor,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(
+                imageVector = icon, 
+                contentDescription = null, 
+                tint = animatedContentColor, 
+                modifier = Modifier.size(24.dp)
+            )
+            Text(
+                text = tab.label, 
+                color = animatedContentColor, 
+                fontSize = 11.sp, 
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            )
+        }
     }
 }
