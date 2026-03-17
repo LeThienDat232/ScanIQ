@@ -1,5 +1,6 @@
 package com.smartscanner
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -346,6 +347,7 @@ private fun ToolCard(item: ToolItem) {
     }
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
     val tabs = BottomTab.values()
@@ -364,7 +366,6 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
             val spacerWidth = 64.dp
             val tabWidth = (totalWidth - spacerWidth) / 4
             
-            // 1. Tính toán vị trí X của Indicator trượt
             val indicatorOffset by animateDpAsState(
                 targetValue = when (selectedIndex) {
                     0 -> 0.dp
@@ -373,18 +374,16 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
                     3 -> tabWidth * 3 + spacerWidth
                     else -> 0.dp
                 },
-                // Animation spring cho cảm giác lướt tự nhiên giống iOS
                 animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow),
                 label = "indicatorOffset"
             )
 
-            // 2. Nền xanh trượt (Sliding Indicator) - Cao bằng đúng thanh Dock
             Box(
                 modifier = Modifier
                     .offset(x = indicatorOffset)
                     .width(tabWidth)
                     .fillMaxHeight()
-                    .background(AppBlue)
+                    .background(AppBlue, RoundedCornerShape(32.dp))
             )
 
             Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -415,7 +414,6 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
 
 @Composable
 private fun BottomNavItem(tab: BottomTab, icon: ImageVector, selected: Boolean, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
-    // Chỉ animate màu của nội dung (Icon/Text) để hòa quyện với Indicator trượt
     val animatedContentColor by animateColorAsState(
         targetValue = if (selected) Color.White else Color.Black.copy(alpha = 0.6f),
         animationSpec = tween(300),
