@@ -1,6 +1,7 @@
 package com.smartscanner
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,6 +11,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -31,12 +33,14 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.smartscanner.ui.TextSummarizerActivity
 import com.smartscanner.ui.theme.SmartScannerTheme
 
 class MainActivity : ComponentActivity() {
@@ -189,6 +193,7 @@ private fun FilesScreen() {
 
 @Composable
 private fun ToolsScreen() {
+    val context = LocalContext.current
     val toolItems = listOf(
         ToolItem("Text Extract", Icons.Outlined.Description, "Convert images to editable text"),
         ToolItem("Text Summarization", Icons.Outlined.Summarize, "AI-powered doc summary", color = Color(0xFFEF5350)),
@@ -213,7 +218,13 @@ private fun ToolsScreen() {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            items(toolItems) { item -> ToolCard(item = item) }
+            items(toolItems) { item -> 
+                ToolCard(item = item) {
+                    if (item.title == "Text Summarization") {
+                        context.startActivity(Intent(context, TextSummarizerActivity::class.java))
+                    }
+                }
+            }
         }
     }
 }
@@ -333,8 +344,16 @@ private fun FileGlyph(label: String, bodyColor: Color, foldColor: Color, stripCo
 }
 
 @Composable
-private fun ToolCard(item: ToolItem) {
-    Surface(color = Color.White, shape = RoundedCornerShape(24.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth().height(180.dp).clickable {}) {
+private fun ToolCard(item: ToolItem, onClick: () -> Unit) {
+    Surface(
+        color = Color.White, 
+        shape = RoundedCornerShape(24.dp), 
+        shadowElevation = 2.dp, 
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(180.dp)
+            .clickable(onClick = onClick)
+    ) {
         Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
             Box(Modifier.size(60.dp).clip(CircleShape).background(item.color.copy(0.1f)), contentAlignment = Alignment.Center) {
                 Icon(item.icon, null, tint = item.color, modifier = Modifier.size(32.dp))
@@ -350,7 +369,7 @@ private fun ToolCard(item: ToolItem) {
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
-    val tabs = BottomTab.values()
+    val tabs = BottomTab.entries.toTypedArray()
     val selectedIndex = tabs.indexOf(selectedTab)
 
     Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
@@ -404,7 +423,10 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
                 .shadow(elevation = 10.dp, shape = CircleShape)
                 .background(AppBlue, CircleShape)
                 .clip(CircleShape)
-                .clickable { },
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { },
             contentAlignment = Alignment.Center
         ) { 
             Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(36.dp)) 
@@ -413,32 +435,21 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
 }
 
 @Composable
-private fun BottomNavItem(tab: BottomTab, icon: ImageVector, selected: Boolean, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
-    val animatedContentColor by animateColorAsState(
-        targetValue = if (selected) Color.White else Color.Black.copy(alpha = 0.6f),
-        animationSpec = tween(300),
-        label = "contentColor"
-    )
-    
+private fun BottomNavItem(tab: BottomTab, icon: ImageVector, isSelected: Boolean, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clickable { onTabSelected(tab) },
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onTabSelected(tab) },
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Icon(
-                imageVector = icon, 
-                contentDescription = null, 
-                tint = animatedContentColor, 
-                modifier = Modifier.size(24.dp)
-            )
-            Text(
-                text = tab.label, 
-                color = animatedContentColor, 
-                fontSize = 11.sp, 
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-            )
-        }
+        Icon(
+            icon,
+            contentDescription = tab.label,
+            tint = if (isSelected) Color.White else Color.Gray,
+            modifier = Modifier.size(26.dp)
+        )
     }
 }
