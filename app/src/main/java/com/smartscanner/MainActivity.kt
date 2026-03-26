@@ -2,10 +2,17 @@ package com.smartscanner
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -40,26 +47,84 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.smartscanner.data.*
+import com.smartscanner.ui.CameraCaptureActivity
+import com.smartscanner.ui.FilesViewModel
 import com.smartscanner.ui.TextSummarizerActivity
 import com.smartscanner.ui.theme.SmartScannerTheme
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        val database = AppDatabase.getDatabase(this)
+        val repository = DocumentRepository(database.documentDao(), database.folderDao())
+        val viewModelFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return FilesViewModel(repository) as T
+            }
+        }
+
+        requestStoragePermission()
+
         enableEdgeToEdge()
         setContent {
             SmartScannerTheme(darkTheme = false, dynamicColor = false) {
-                SmartScannerApp()
+                val filesViewModel: FilesViewModel = viewModel(factory = viewModelFactory)
+                
+                // Refresh downloads on every start/resume
+                DisposableEffect(Unit) {
+                    filesViewModel.syncDownloads()
+                    onDispose {}
+                }
+                
+                SmartScannerApp(filesViewModel)
             }
         }
     }
-}
 
-@Preview(showBackground = true)
-@Composable
-fun SmartScannerPreview() {
-    SmartScannerTheme(darkTheme = false, dynamicColor = false) {
-        SmartScannerApp()
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.addCategory("android.intent.category.DEFAULT")
+                    intent.data = Uri.parse(String.format("package:%s", applicationContext.packageName))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    val intent = Intent()
+                    intent.action = Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+                    startActivity(intent)
+                }
+            }
+        }
+    }
+
+    fun handleFileImport(uri: Uri, repository: DocumentRepository) {
+        lifecycleScope.launch {
+            val filePath = FileStorageManager.saveFileFromUri(this@MainActivity, uri)
+            if (filePath != null) {
+                val fileName = FileStorageManager.getFileName(this@MainActivity, uri) ?: "Imported File"
+                val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+                
+                val newDoc = Document(
+                    folderId = null,
+                    title = fileName,
+                    filePath = filePath,
+                    fileType = mimeType,
+                    createdAt = System.currentTimeMillis()
+                )
+                repository.insertDocument(newDoc)
+                Toast.makeText(this@MainActivity, "Imported: $fileName", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 }
 
@@ -74,7 +139,7 @@ private enum class BottomTab(val label: String) {
 }
 
 private enum class ExplorerType {
-    Folder, Png, Xls, Csv, Pdf, Doc, Ppt,
+    Folder, Png, Xls, Csv, Pdf, Doc, Ppt, GenericFile
 }
 
 private data class RecentFile(
@@ -98,8 +163,23 @@ private data class ToolItem(
 )
 
 @Composable
-private fun SmartScannerApp() {
+private fun SmartScannerApp(viewModel: FilesViewModel) {
     var selectedTab by remember { mutableStateOf(BottomTab.Home) }
+    val context = LocalContext.current as MainActivity
+    val database = remember { AppDatabase.getDatabase(context) }
+    val repository = remember { DocumentRepository(database.documentDao(), database.folderDao()) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { context.handleFileImport(it, repository) }
+    }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { context.handleFileImport(it, repository) }
+    }
 
     Box(
         modifier = Modifier
@@ -114,8 +194,13 @@ private fun SmartScannerApp() {
             label = "pageTransition"
         ) { targetTab ->
             when (targetTab) {
-                BottomTab.Home -> HomeScreen()
-                BottomTab.Files -> FilesScreen()
+                BottomTab.Home -> HomeScreen(viewModel)
+                BottomTab.Files -> FilesScreen(
+                    viewModel = viewModel,
+                    onUploadFile = { filePickerLauncher.launch("*/*") },
+                    onUploadImage = { imagePickerLauncher.launch("image/*") },
+                    onCreateFolder = { viewModel.createFolder("New Folder") }
+                )
                 BottomTab.Tools -> ToolsScreen()
                 BottomTab.Options -> OptionsScreen()
             }
@@ -132,17 +217,17 @@ private fun SmartScannerApp() {
 }
 
 @Composable
-private fun HomeScreen() {
-    val recentFiles = listOf(
-        RecentFile("Final_project_final_version_v2.pdf", "13:29 22/12/2025", ExplorerType.Pdf),
-        RecentFile("Dataset_2024_comprehensive.csv", "10:15 21/12/2025", ExplorerType.Csv),
-        RecentFile("Business_plan_internal.doc", "16:45 20/12/2025", ExplorerType.Doc),
-        RecentFile("Financial_report_Q4.xls", "09:30 19/12/2025", ExplorerType.Xls),
-        RecentFile("Scanner_result_001.png", "11:05 17/12/2025", ExplorerType.Png),
-        RecentFile("Meeting_notes.pdf", "14:20 16/12/2025", ExplorerType.Pdf),
-        RecentFile("Icon_export.png", "08:15 15/12/2025", ExplorerType.Png),
-        RecentFile("Invoice_2025.xls", "17:40 14/12/2025", ExplorerType.Xls),
-    )
+private fun HomeScreen(viewModel: FilesViewModel) {
+    val documents by viewModel.recentDocuments.collectAsState()
+    val dateFormat = remember { SimpleDateFormat("HH:mm dd/MM/yyyy", Locale.getDefault()) }
+
+    val recentFiles = documents.map { doc ->
+        RecentFile(
+            title = doc.title,
+            date = dateFormat.format(Date(doc.createdAt)),
+            type = mapFileType(doc.fileType)
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         BlueHeader(showShortcuts = false)
@@ -153,41 +238,113 @@ private fun HomeScreen() {
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 24.dp, top = 10.dp, bottom = 6.dp)
         )
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(recentFiles.size) { index ->
-                RecentFileRow(file = recentFiles[index])
+        if (recentFiles.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(bottom = 140.dp), contentAlignment = Alignment.Center) {
+                Text("No recent files", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(recentFiles.size) { index ->
+                    RecentFileRow(file = recentFiles[index])
+                }
             }
         }
     }
 }
 
 @Composable
-private fun FilesScreen() {
-    val items = listOf(
-        ExplorerItem("Projects", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("Documents", "13:29 22/12/2025", ExplorerType.Folder),
-        ExplorerItem("resume_cv.pdf", "13:29 22/12/2025", ExplorerType.Pdf),
-        ExplorerItem("budget_2025.xls", "13:29 22/12/2025", ExplorerType.Xls),
-        ExplorerItem("photo_scan.png", "13:29 22/12/2025", ExplorerType.Png),
-    )
+private fun FilesScreen(
+    viewModel: FilesViewModel,
+    onUploadFile: () -> Unit,
+    onUploadImage: () -> Unit,
+    onCreateFolder: () -> Unit
+) {
+    val folders by viewModel.folders.collectAsState()
+    val dbDocuments by viewModel.databaseDocuments.collectAsState()
+    val downloadFiles by viewModel.downloadFiles.collectAsState()
+    val dateFormat = remember { SimpleDateFormat("HH:mm dd/MM/yyyy", Locale.getDefault()) }
+
+    var showingDownloads by remember { mutableStateOf(false) }
+
+    val explorerItems = mutableListOf<ExplorerItem>()
+    
+    if (showingDownloads) {
+        downloadFiles.forEach { doc ->
+            explorerItems.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType)))
+        }
+    } else {
+        // Add "Downloads" virtual folder
+        explorerItems.add(ExplorerItem("Downloads", "${downloadFiles.size} files synced", ExplorerType.Folder))
+        
+        folders.forEach { folder ->
+            explorerItems.add(ExplorerItem(folder.name, dateFormat.format(Date(folder.createdAt)), ExplorerType.Folder))
+        }
+        dbDocuments.forEach { doc ->
+            explorerItems.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType)))
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        BlueHeader(showShortcuts = true)
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 140.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            items(items) { item ->
-                ExplorerGridItem(item = item)
+        BlueHeader(
+            showShortcuts = true,
+            onUploadFile = onUploadFile,
+            onUploadImage = onUploadImage,
+            onCreateFolder = onCreateFolder
+        )
+        
+        // Navigation bar for virtual folders
+        if (showingDownloads) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Outlined.ArrowBack, 
+                    null, 
+                    modifier = Modifier.clickable { showingDownloads = false }.size(24.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text("Downloads", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
         }
+
+        if (explorerItems.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(bottom = 140.dp), contentAlignment = Alignment.Center) {
+                Text("Your storage is empty", color = Color.Gray)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 140.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                items(explorerItems) { item ->
+                    ExplorerGridItem(item = item, onClick = {
+                        if (item.title == "Downloads" && !showingDownloads) {
+                            showingDownloads = true
+                        }
+                    })
+                }
+            }
+        }
+    }
+}
+
+private fun mapFileType(mimeType: String): ExplorerType {
+    return when {
+        mimeType.contains("pdf", ignoreCase = true) -> ExplorerType.Pdf
+        mimeType.contains("image", ignoreCase = true) -> ExplorerType.Png
+        mimeType.contains("excel", ignoreCase = true) || mimeType.contains("spreadsheet", ignoreCase = true) -> ExplorerType.Xls
+        mimeType.contains("csv", ignoreCase = true) -> ExplorerType.Csv
+        mimeType.contains("word", ignoreCase = true) || mimeType.contains("officedocument.wordprocessingml", ignoreCase = true) -> ExplorerType.Doc
+        mimeType.contains("presentation", ignoreCase = true) -> ExplorerType.Ppt
+        else -> ExplorerType.GenericFile
     }
 }
 
@@ -237,7 +394,12 @@ private fun OptionsScreen() {
 }
 
 @Composable
-private fun BlueHeader(showShortcuts: Boolean) {
+private fun BlueHeader(
+    showShortcuts: Boolean,
+    onUploadFile: () -> Unit = {},
+    onUploadImage: () -> Unit = {},
+    onCreateFolder: () -> Unit = {}
+) {
     Box(modifier = Modifier.fillMaxWidth().background(AppBlue)) {
         Column(
             modifier = Modifier
@@ -251,11 +413,11 @@ private fun BlueHeader(showShortcuts: Boolean) {
             if (showShortcuts) {
                 Spacer(modifier = Modifier.height(25.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    ShortcutButton(Icons.Outlined.UploadFile, "Upload file", Modifier.weight(1f))
+                    ShortcutButton(Icons.Outlined.UploadFile, "Upload file", Modifier.weight(1f), onClick = onUploadFile)
                     Spacer(Modifier.width(14.dp))
-                    ShortcutButton(Icons.Outlined.ImageSearch, "Upload image", Modifier.weight(1f))
+                    ShortcutButton(Icons.Outlined.ImageSearch, "Upload image", Modifier.weight(1f), onClick = onUploadImage)
                     Spacer(modifier = Modifier.width(14.dp))
-                    ShortcutButton(Icons.Outlined.CreateNewFolder, "Create folder", Modifier.weight(1f))
+                    ShortcutButton(Icons.Outlined.CreateNewFolder, "Create folder", Modifier.weight(1f), onClick = onCreateFolder)
                 }
             }
         }
@@ -274,11 +436,15 @@ private fun SearchPill() {
 }
 
 @Composable
-private fun ShortcutButton(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
-    Surface(color = Color(0xFFF4F4F4), shape = RoundedCornerShape(22.dp), modifier = modifier.height(104.dp)) {
+private fun ShortcutButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+    Surface(
+        color = Color(0xFFF4F4F4), 
+        shape = RoundedCornerShape(22.dp), 
+        modifier = modifier.height(104.dp).clickable { onClick() }
+    ) {
         Column(modifier = Modifier.fillMaxSize().padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
             Icon(icon, null, tint = AppBlue, modifier = Modifier.size(44.dp))
-            Text(label, color = AppBlue, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(label, color = AppBlue, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -300,8 +466,11 @@ private fun RecentFileRow(file: RecentFile) {
 }
 
 @Composable
-private fun ExplorerGridItem(item: ExplorerItem) {
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun ExplorerGridItem(item: ExplorerItem, onClick: () -> Unit = {}) {
+    Column(
+        Modifier.fillMaxWidth().clickable { onClick() }, 
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Box(modifier = Modifier.height(120.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Box(Modifier.scale(0.9f)) { FileOrFolderIcon(item.type) }
         }
@@ -315,12 +484,13 @@ private fun ExplorerGridItem(item: ExplorerItem) {
 private fun FileOrFolderIcon(type: ExplorerType) {
     when (type) {
         ExplorerType.Folder -> FolderGlyph()
-        ExplorerType.Png -> FileGlyph("PNG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
+        ExplorerType.Png -> FileGlyph("IMG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
         ExplorerType.Xls -> FileGlyph("XLS", Color(0xFF3DBA7C), Color(0xFF188D56), Color(0xFF127A48))
         ExplorerType.Csv -> FileGlyph("CSV", Color(0xFF58A8E2), Color(0xFF2A73BA), Color(0xFF2163A6))
         ExplorerType.Pdf -> FileGlyph("PDF", Color(0xFFE57373), Color(0xFFC62828), Color(0xFFB71C1C))
         ExplorerType.Doc -> FileGlyph("DOC", Color(0xFF64B5F6), Color(0xFF1976D2), Color(0xFF0D47A1))
         ExplorerType.Ppt -> FileGlyph("PPT", Color(0xFFFFB74D), Color(0xFFF57C00), Color(0xFFE65100))
+        ExplorerType.GenericFile -> FileGlyph("FILE", Color(0xFF9E9E9E), Color(0xFF616161), Color(0xFF424242))
     }
 }
 
@@ -371,6 +541,7 @@ private fun ToolCard(item: ToolItem, onClick: () -> Unit) {
 private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> Unit, modifier: Modifier = Modifier) {
     val tabs = BottomTab.entries.toTypedArray()
     val selectedIndex = tabs.indexOf(selectedTab)
+    val context = LocalContext.current
 
     Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
         BoxWithConstraints(
@@ -426,7 +597,9 @@ private fun BottomNavDock(selectedTab: BottomTab, onTabSelected: (BottomTab) -> 
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { },
+                ) { 
+                    context.startActivity(Intent(context, CameraCaptureActivity::class.java))
+                },
             contentAlignment = Alignment.Center
         ) { 
             Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(36.dp)) 
