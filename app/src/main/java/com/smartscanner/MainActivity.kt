@@ -1,23 +1,34 @@
 package com.smartscanner
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
+import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,11 +38,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,13 +51,14 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -57,6 +69,7 @@ import com.smartscanner.ui.FilesViewModel
 import com.smartscanner.ui.TextSummarizerActivity
 import com.smartscanner.ui.theme.SmartScannerTheme
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -68,6 +81,7 @@ class MainActivity : ComponentActivity() {
         val repository = DocumentRepository(database.documentDao(), database.folderDao())
         val viewModelFactory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
                 return FilesViewModel(repository) as T
             }
         }
@@ -79,7 +93,6 @@ class MainActivity : ComponentActivity() {
             SmartScannerTheme(darkTheme = false, dynamicColor = false) {
                 val filesViewModel: FilesViewModel = viewModel(factory = viewModelFactory)
                 
-                // Refresh downloads on every start/resume
                 DisposableEffect(Unit) {
                     filesViewModel.syncDownloads()
                     onDispose {}
@@ -126,6 +139,39 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    fun openFile(filePath: String, fileType: String? = null) {
+        try {
+            val file = File(filePath)
+            if (!file.exists()) {
+                Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val uri: Uri = FileProvider.getUriForFile(
+                applicationContext,
+                "com.smartscanner.fileprovider",
+                file
+            )
+
+            val mimeType = fileType ?: getMimeType(filePath)
+
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.setDataAndType(uri, mimeType)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No app found to open this file", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
+    }
+
+    private fun getMimeType(url: String): String {
+        val extension = MimeTypeMap.getFileExtensionFromUrl(url)
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension?.lowercase()) ?: "application/octet-stream"
+    }
 }
 
 private val AppBlue = Color(0xFF3367EF)
@@ -153,6 +199,7 @@ private data class ExplorerItem(
     val title: String,
     val date: String,
     val type: ExplorerType,
+    val originalItem: Any? = null
 )
 
 private data class ToolItem(
@@ -181,6 +228,16 @@ private fun SmartScannerApp(viewModel: FilesViewModel) {
         uri?.let { context.handleFileImport(it, repository) }
     }
 
+    // Launcher for OS Trash Request
+    val trashLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.syncDownloads()
+            Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -199,7 +256,7 @@ private fun SmartScannerApp(viewModel: FilesViewModel) {
                     viewModel = viewModel,
                     onUploadFile = { filePickerLauncher.launch("*/*") },
                     onUploadImage = { imagePickerLauncher.launch("image/*") },
-                    onCreateFolder = { viewModel.createFolder("New Folder") }
+                    trashLauncher = trashLauncher
                 )
                 BottomTab.Tools -> ToolsScreen()
                 BottomTab.Options -> OptionsScreen()
@@ -220,14 +277,7 @@ private fun SmartScannerApp(viewModel: FilesViewModel) {
 private fun HomeScreen(viewModel: FilesViewModel) {
     val documents by viewModel.recentDocuments.collectAsState()
     val dateFormat = remember { SimpleDateFormat("HH:mm dd/MM/yyyy", Locale.getDefault()) }
-
-    val recentFiles = documents.map { doc ->
-        RecentFile(
-            title = doc.title,
-            date = dateFormat.format(Date(doc.createdAt)),
-            type = mapFileType(doc.fileType)
-        )
-    }
+    val context = LocalContext.current as MainActivity
 
     Column(modifier = Modifier.fillMaxSize()) {
         BlueHeader(showShortcuts = false)
@@ -238,7 +288,7 @@ private fun HomeScreen(viewModel: FilesViewModel) {
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 24.dp, top = 10.dp, bottom = 6.dp)
         )
-        if (recentFiles.isEmpty()) {
+        if (documents.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(bottom = 140.dp), contentAlignment = Alignment.Center) {
                 Text("No recent files", color = Color.Gray)
             }
@@ -248,8 +298,16 @@ private fun HomeScreen(viewModel: FilesViewModel) {
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(recentFiles.size) { index ->
-                    RecentFileRow(file = recentFiles[index])
+                items(documents.size) { index ->
+                    val doc = documents[index]
+                    RecentFileRow(
+                        file = RecentFile(
+                            title = doc.title,
+                            date = dateFormat.format(Date(doc.createdAt)),
+                            type = mapFileType(doc.fileType)
+                        ),
+                        onClick = { context.openFile(doc.filePath, doc.fileType) }
+                    )
                 }
             }
         }
@@ -261,54 +319,173 @@ private fun FilesScreen(
     viewModel: FilesViewModel,
     onUploadFile: () -> Unit,
     onUploadImage: () -> Unit,
-    onCreateFolder: () -> Unit
+    trashLauncher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 ) {
+    val context = LocalContext.current as MainActivity
     val folders by viewModel.folders.collectAsState()
     val dbDocuments by viewModel.databaseDocuments.collectAsState()
     val downloadFiles by viewModel.downloadFiles.collectAsState()
     val dateFormat = remember { SimpleDateFormat("HH:mm dd/MM/yyyy", Locale.getDefault()) }
 
     var showingDownloads by remember { mutableStateOf(false) }
+    var openedFolder by remember { mutableStateOf<Folder?>(null) }
+    var selectedItems by remember { mutableStateOf(setOf<Any>()) }
+    val isSelectionMode = selectedItems.isNotEmpty()
 
-    val explorerItems = mutableListOf<ExplorerItem>()
-    
-    if (showingDownloads) {
-        downloadFiles.forEach { doc ->
-            explorerItems.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType)))
+    var itemToRename by remember { mutableStateOf<Any?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+
+    if (itemToRename != null) {
+        val originalName = when (val item = itemToRename) {
+            is Folder -> item.name
+            is Document -> item.title.substringBeforeLast(".", item.title)
+            else -> ""
         }
-    } else {
-        // Add "Downloads" virtual folder
-        explorerItems.add(ExplorerItem("Downloads", "${downloadFiles.size} files synced", ExplorerType.Folder))
-        
-        folders.forEach { folder ->
-            explorerItems.add(ExplorerItem(folder.name, dateFormat.format(Date(folder.createdAt)), ExplorerType.Folder))
+        val extension = if (itemToRename is Document && (itemToRename as Document).title.contains(".")) {
+            "." + (itemToRename as Document).title.substringAfterLast(".")
+        } else ""
+
+        AlertDialog(
+            onDismissRequest = { itemToRename = null },
+            title = { Text("Rename") },
+            text = {
+                TextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it },
+                    singleLine = true,
+                    suffix = { Text(extension) }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val finalName = renameValue + extension
+                    context.lifecycleScope.launch {
+                        when (val item = itemToRename) {
+                            is Folder -> viewModel.renameFolder(item, finalName)
+                            is Document -> {
+                                if (item.folderId == -1) {
+                                    FileStorageManager.renamePhysicalFile(context, item.filePath, finalName)
+                                    viewModel.syncDownloads()
+                                } else {
+                                    viewModel.renameDocument(item, finalName)
+                                }
+                            }
+                        }
+                        itemToRename = null
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToRename = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    BackHandler(enabled = isSelectionMode || showingDownloads || openedFolder != null) {
+        if (isSelectionMode) {
+            selectedItems = emptySet()
+        } else if (showingDownloads) {
+            showingDownloads = false
+        } else if (openedFolder != null) {
+            openedFolder = null
         }
-        dbDocuments.forEach { doc ->
-            explorerItems.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType)))
+    }
+
+    val explorerItems = remember(folders, dbDocuments, downloadFiles, showingDownloads, openedFolder) {
+        val items = mutableListOf<ExplorerItem>()
+        if (showingDownloads) {
+            downloadFiles.forEach { doc ->
+                items.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType), doc))
+            }
+        } else if (openedFolder != null) {
+            folders.filter { it.parentFolderId == openedFolder!!.id }.forEach { folder ->
+                items.add(ExplorerItem(folder.name, dateFormat.format(Date(folder.createdAt)), ExplorerType.Folder, folder))
+            }
+            dbDocuments.filter { it.folderId == openedFolder!!.id }.forEach { doc ->
+                items.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType), doc))
+            }
+        } else {
+            items.add(ExplorerItem("Downloads", "${downloadFiles.size} files synced", ExplorerType.Folder, "VIRTUAL_DOWNLOADS"))
+            folders.filter { it.parentFolderId == null }.forEach { folder ->
+                items.add(ExplorerItem(folder.name, dateFormat.format(Date(folder.createdAt)), ExplorerType.Folder, folder))
+            }
+            dbDocuments.filter { it.folderId == null }.forEach { doc ->
+                items.add(ExplorerItem(doc.title, dateFormat.format(Date(doc.createdAt)), mapFileType(doc.fileType), doc))
+            }
         }
+        items
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         BlueHeader(
             showShortcuts = true,
+            isSelectionMode = isSelectionMode,
             onUploadFile = onUploadFile,
             onUploadImage = onUploadImage,
-            onCreateFolder = onCreateFolder
+            onCreateFolder = { viewModel.createFolder("New Folder", openedFolder?.id) },
+            onDeleteSelected = {
+                val itemsList = selectedItems.toList()
+                val docsToTrash = mutableListOf<Uri>()
+                context.lifecycleScope.launch {
+                    itemsList.forEach { item ->
+                        when (item) {
+                            is Document -> {
+                                if (item.folderId == -1) {
+                                    FileStorageManager.getContentUriFromPath(context, item.filePath)?.let { uri ->
+                                        docsToTrash.add(uri)
+                                    }
+                                } else {
+                                    viewModel.deleteDocument(item)
+                                }
+                            }
+                            is Folder -> viewModel.deleteFolder(item)
+                        }
+                    }
+                    if (docsToTrash.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        try {
+                            val pendingIntent = MediaStore.createTrashRequest(context.contentResolver, docsToTrash, true)
+                            trashLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                        } catch (e: Exception) {
+                            itemsList.filterIsInstance<Document>().filter { it.folderId == -1 }.forEach {
+                                FileStorageManager.deletePhysicalFile(it.filePath)
+                            }
+                            viewModel.syncDownloads()
+                        }
+                    } else if (itemsList.any { it is Document && it.folderId == -1 }) {
+                        viewModel.syncDownloads()
+                    }
+                }
+                selectedItems = emptySet()
+            },
+            onShareSelected = { /* Handle share */ },
+            onMoveToNewFolder = {
+                val selectedDocs = selectedItems.filterIsInstance<Document>()
+                if (selectedDocs.isNotEmpty()) {
+                    viewModel.createFolderAndMoveDocuments("New Grouped Folder", selectedDocs, openedFolder?.id)
+                }
+                selectedItems = emptySet()
+            }
         )
         
-        // Navigation bar for virtual folders
-        if (showingDownloads) {
+        if (showingDownloads || openedFolder != null) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    Icons.Outlined.ArrowBack, 
+                    Icons.AutoMirrored.Outlined.ArrowBack, 
                     null, 
-                    modifier = Modifier.clickable { showingDownloads = false }.size(24.dp)
+                    modifier = Modifier.clickable { 
+                        showingDownloads = false 
+                        openedFolder = null
+                    }.size(24.dp)
                 )
                 Spacer(Modifier.width(12.dp))
-                Text("Downloads", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (showingDownloads) "Downloads" else openedFolder?.name ?: "Folder", 
+                    fontSize = 20.sp, 
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
@@ -325,11 +502,42 @@ private fun FilesScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 items(explorerItems) { item ->
-                    ExplorerGridItem(item = item, onClick = {
-                        if (item.title == "Downloads" && !showingDownloads) {
-                            showingDownloads = true
+                    val isSelected = item.originalItem?.let { selectedItems.contains(it) } ?: false
+                    ExplorerGridItem(
+                        item = item,
+                        isSelected = isSelected,
+                        onClick = {
+                            if (isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                val current = selectedItems.toMutableSet()
+                                if (isSelected) current.remove(item.originalItem)
+                                else current.add(item.originalItem)
+                                selectedItems = current
+                            } else {
+                                when (val original = item.originalItem) {
+                                    "VIRTUAL_DOWNLOADS" -> showingDownloads = true
+                                    is Folder -> openedFolder = original
+                                    is Document -> {
+                                        context.openFile(original.filePath, original.fileType)
+                                    }
+                                }
+                            }
+                        },
+                        onLongClick = {
+                            if (!isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                selectedItems = setOf(item.originalItem)
+                            }
+                        },
+                        onDoubleClick = {
+                            if (item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                itemToRename = item.originalItem
+                                renameValue = when (val original = item.originalItem) {
+                                    is Folder -> original.name
+                                    is Document -> original.title.substringBeforeLast(".", original.title)
+                                    else -> ""
+                                }
+                            }
                         }
-                    })
+                    )
                 }
             }
         }
@@ -396,9 +604,13 @@ private fun OptionsScreen() {
 @Composable
 private fun BlueHeader(
     showShortcuts: Boolean,
+    isSelectionMode: Boolean = false,
     onUploadFile: () -> Unit = {},
     onUploadImage: () -> Unit = {},
-    onCreateFolder: () -> Unit = {}
+    onCreateFolder: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
+    onShareSelected: () -> Unit = {},
+    onMoveToNewFolder: () -> Unit = {}
 ) {
     Box(modifier = Modifier.fillMaxWidth().background(AppBlue)) {
         Column(
@@ -413,11 +625,19 @@ private fun BlueHeader(
             if (showShortcuts) {
                 Spacer(modifier = Modifier.height(25.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    ShortcutButton(Icons.Outlined.UploadFile, "Upload file", Modifier.weight(1f), onClick = onUploadFile)
-                    Spacer(Modifier.width(14.dp))
-                    ShortcutButton(Icons.Outlined.ImageSearch, "Upload image", Modifier.weight(1f), onClick = onUploadImage)
-                    Spacer(modifier = Modifier.width(14.dp))
-                    ShortcutButton(Icons.Outlined.CreateNewFolder, "Create folder", Modifier.weight(1f), onClick = onCreateFolder)
+                    if (isSelectionMode) {
+                        ShortcutButton(Icons.Outlined.Delete, "Delete", Modifier.weight(1f), onClick = onDeleteSelected)
+                        Spacer(Modifier.width(14.dp))
+                        ShortcutButton(Icons.Outlined.Share, "Share", Modifier.weight(1f), onClick = onShareSelected)
+                        Spacer(Modifier.width(14.dp))
+                        ShortcutButton(Icons.AutoMirrored.Outlined.DriveFileMove, "To Folder", Modifier.weight(1f), onClick = onMoveToNewFolder)
+                    } else {
+                        ShortcutButton(Icons.Outlined.UploadFile, "Upload file", Modifier.weight(1f), onClick = onUploadFile)
+                        Spacer(Modifier.width(14.dp))
+                        ShortcutButton(Icons.Outlined.ImageSearch, "Upload image", Modifier.weight(1f), onClick = onUploadImage)
+                        Spacer(Modifier.width(14.dp))
+                        ShortcutButton(Icons.Outlined.CreateNewFolder, "Create folder", Modifier.weight(1f), onClick = onCreateFolder)
+                    }
                 }
             }
         }
@@ -450,8 +670,14 @@ private fun ShortcutButton(icon: ImageVector, label: String, modifier: Modifier 
 }
 
 @Composable
-private fun RecentFileRow(file: RecentFile) {
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun RecentFileRow(file: RecentFile, onClick: () -> Unit = {}) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 8.dp), 
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Box(modifier = Modifier.size(80.dp).scale(0.8f), contentAlignment = Alignment.Center) {
             FileOrFolderIcon(file.type)
         }
@@ -465,10 +691,31 @@ private fun RecentFileRow(file: RecentFile) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ExplorerGridItem(item: ExplorerItem, onClick: () -> Unit = {}) {
+private fun ExplorerGridItem(
+    item: ExplorerItem, 
+    isSelected: Boolean = false, 
+    onClick: () -> Unit = {}, 
+    onLongClick: () -> Unit = {},
+    onDoubleClick: () -> Unit = {}
+) {
     Column(
-        Modifier.fillMaxWidth().clickable { onClick() }, 
+        Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (isSelected) 2.dp else 0.dp,
+                color = if (isSelected) AppBlue else Color.Transparent,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onDoubleTap = { onDoubleClick() },
+                    onLongPress = { onLongClick() }
+                )
+            }
+            .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(modifier = Modifier.height(120.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
