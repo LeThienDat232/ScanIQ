@@ -387,7 +387,8 @@ private fun FilesScreen(
         } else if (showingDownloads) {
             showingDownloads = false
         } else if (openedFolder != null) {
-            openedFolder = null
+            val parentId = openedFolder?.parentFolderId
+            openedFolder = if (parentId == null) null else folders.find { it.id == parentId }
         }
     }
 
@@ -476,8 +477,12 @@ private fun FilesScreen(
                     Icons.AutoMirrored.Outlined.ArrowBack, 
                     null, 
                     modifier = Modifier.clickable { 
-                        showingDownloads = false 
-                        openedFolder = null
+                        if (showingDownloads) {
+                            showingDownloads = false
+                        } else {
+                            val parentId = openedFolder?.parentFolderId
+                            openedFolder = if (parentId == null) null else folders.find { it.id == parentId }
+                        }
                     }.size(24.dp)
                 )
                 Spacer(Modifier.width(12.dp))
@@ -501,10 +506,22 @@ private fun FilesScreen(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                items(explorerItems) { item ->
-                    val isSelected = item.originalItem?.let { selectedItems.contains(it) } ?: false
+                items(
+                    items = explorerItems,
+                    key = { 
+                        when (val original = it.originalItem) {
+                            is Folder -> "folder_${original.id}"
+                            is Document -> "doc_${original.id}"
+                            else -> it.title
+                        }
+                    }
+                ) { item ->
+                    val isSelected = remember(item.originalItem, selectedItems) {
+                        item.originalItem?.let { selectedItems.contains(it) } ?: false
+                    }
                     ExplorerGridItem(
                         item = item,
+                        isSelectionMode = isSelectionMode,
                         isSelected = isSelected,
                         onClick = {
                             if (isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
@@ -695,11 +712,16 @@ private fun RecentFileRow(file: RecentFile, onClick: () -> Unit = {}) {
 @Composable
 private fun ExplorerGridItem(
     item: ExplorerItem, 
+    isSelectionMode: Boolean = false,
     isSelected: Boolean = false, 
     onClick: () -> Unit = {}, 
     onLongClick: () -> Unit = {},
     onDoubleClick: () -> Unit = {}
 ) {
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnLongClick by rememberUpdatedState(onLongClick)
+    val currentOnDoubleClick by rememberUpdatedState(onDoubleClick)
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -708,11 +730,11 @@ private fun ExplorerGridItem(
                 color = if (isSelected) AppBlue else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
-            .pointerInput(Unit) {
+            .pointerInput(item, isSelectionMode, isSelected) {
                 detectTapGestures(
-                    onTap = { onClick() },
-                    onDoubleTap = { onDoubleClick() },
-                    onLongPress = { onLongClick() }
+                    onTap = { currentOnClick() },
+                    onDoubleTap = { currentOnDoubleClick() },
+                    onLongPress = { currentOnLongClick() }
                 )
             }
             .padding(8.dp),
