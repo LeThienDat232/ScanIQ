@@ -1,39 +1,62 @@
 package com.smartscanner.ui
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.smartscanner.databinding.ActivityTextSummarizerBinding
-import com.smartscanner.network.BackendApiService
-import com.smartscanner.network.SummarizeRequest
-import com.smartscanner.network.SummarizeResponse
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
+import com.smartscanner.service.SummarizerResultStore
+import com.smartscanner.service.SummarizerService
 
 class TextSummarizerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityTextSummarizerBinding
-    private lateinit var apiService: BackendApiService
+    
+    private val resultReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val result = intent?.getStringExtra("RESULT") ?: ""
+            val isSuccess = intent?.getBooleanExtra("IS_SUCCESS", false) ?: false
+            
+            setLoading(false)
+            if (isSuccess) {
+                binding.tvSummaryResult.text = result
+                showSummary()
+            } else {
+                showError(result)
+            }
+        }
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            startSummarization()
+        } else {
+            Toast.makeText(this, "Permission denied for notifications", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Enable edge-to-edge
         enableEdgeToEdge()
-        
         binding = ActivityTextSummarizerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Adjust for system bars (status bar and navigation bar)
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
@@ -41,11 +64,41 @@ class TextSummarizerActivity : AppCompatActivity() {
         }
 
         setupToolbar()
-        setupRetrofit()
         setupListeners()
-        
-        // Initial state: Hide summary components
         hideSummary()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter("com.smartscanner.SUMMARIZATION_RESULT")
+        LocalBroadcastManager.getInstance(this).registerReceiver(resultReceiver, filter)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Kiểm tra xem Service đã hoàn thành trong khi App ở background chưa
+        checkExistingResult()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(resultReceiver)
+    }
+
+    private fun checkExistingResult() {
+        if (SummarizerResultStore.isLoading) {
+            setLoading(true)
+        } else if (SummarizerResultStore.lastResult != null) {
+            setLoading(false)
+            if (SummarizerResultStore.isSuccess) {
+                binding.tvSummaryResult.text = SummarizerResultStore.lastResult
+                showSummary()
+            } else {
+                // Nếu có lỗi đã lưu, hiển thị nhưng không Toast liên tục
+                binding.tvSummaryResult.text = "Lỗi trước đó: ${SummarizerResultStore.lastResult}"
+                showSummary()
+            }
+        }
     }
 
     private fun setupToolbar() {
@@ -54,26 +107,9 @@ class TextSummarizerActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupRetrofit() {
-        // Use 10.0.2.2 for Android Emulator to access localhost of the host machine
-        val baseUrl = "http://10.0.2.2:3000/" 
-        
-        val retrofit = Retrofit.Builder()
-            .baseUrl(baseUrl)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-
-        apiService = retrofit.create(BackendApiService::class.java)
-    }
-
     private fun setupListeners() {
         binding.btnSummarize.setOnClickListener {
-            val text = binding.etInputText.text.toString().trim()
-            if (text.isNotEmpty()) {
-                summarizeText(text)
-            } else {
-                Toast.makeText(this, "Please enter some text", Toast.LENGTH_SHORT).show()
-            }
+            checkPermissionAndStart()
         }
 
         binding.btnCopy.setOnClickListener {
@@ -87,27 +123,43 @@ class TextSummarizerActivity : AppCompatActivity() {
         }
     }
 
-    private fun summarizeText(text: String) {
-        setLoading(true)
-        val request = SummarizeRequest(text)
-        
-        apiService.summarizeText(request).enqueue(object : Callback<SummarizeResponse> {
-            override fun onResponse(call: Call<SummarizeResponse>, response: Response<SummarizeResponse>) {
-                setLoading(false)
-                if (response.isSuccessful && response.body()?.status == "success") {
-                    val summaryText = response.body()?.data?.summaryText ?: ""
-                    binding.tvSummaryResult.text = summaryText
-                    showSummary()
-                } else {
-                    showError("Summarization failed. Please check your connection.")
-                }
-            }
+    private fun checkPermissionAndStart() {
+        val text = binding.etInputText.text.toString().trim()
+        if (text.isEmpty()) {
+            Toast.makeText(this, "Please enter some text", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-            override fun onFailure(call: Call<SummarizeResponse>, t: Throwable) {
-                setLoading(false)
-                showError("Connection failed. Please try again.")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED) {
+                startSummarization()
+            } else {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-        })
+        } else {
+            startSummarization()
+        }
+    }
+
+    private fun startSummarization() {
+        val text = binding.etInputText.text.toString().trim()
+        
+        // Reset store trước khi bắt đầu lượt mới
+        SummarizerResultStore.clear()
+        SummarizerResultStore.isLoading = true
+
+        setLoading(true)
+        
+        val intent = Intent(this, SummarizerService::class.java).apply {
+            putExtra("INPUT_TEXT", text)
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun setLoading(isLoading: Boolean) {

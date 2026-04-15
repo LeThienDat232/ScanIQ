@@ -10,4 +10,10 @@ interface FolderDao {
 
     @Query("SELECT * FROM folders ORDER BY createdAt DESC")
     fun getAllFolders(): Flow<List<Folder>>
+
+    @Delete
+    suspend fun deleteFolder(folder: Folder)
+
+    @Update
+    suspend fun updateFolder(folder: Folder)
 }

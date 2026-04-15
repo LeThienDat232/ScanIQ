@@ -66,9 +66,9 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         }
     }
 
-    fun createFolder(name: String) {
+    fun createFolder(name: String, parentFolderId: Int? = null) {
         viewModelScope.launch {
-            repository.insertFolder(name)
+            repository.insertFolder(name, parentFolderId)
         }
     }
 
@@ -77,6 +77,39 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
             if (document.folderId != -1) {
                 repository.deleteDocumentAndFile(document)
             }
+        }
+    }
+
+    fun deleteFolder(folder: Folder) {
+        viewModelScope.launch {
+            repository.deleteFolder(folder)
+        }
+    }
+
+    fun moveDocumentsToFolder(documents: List<Document>, folderId: Int) {
+        viewModelScope.launch {
+            documents.forEach { doc ->
+                repository.updateDocument(doc.copy(folderId = folderId))
+            }
+        }
+    }
+
+    fun createFolderAndMoveDocuments(folderName: String, documents: List<Document>, parentFolderId: Int? = null) {
+        viewModelScope.launch {
+            val folderId = repository.insertFolder(folderName, parentFolderId).toInt()
+            moveDocumentsToFolder(documents, folderId)
+        }
+    }
+
+    fun renameFolder(folder: Folder, newName: String) {
+        viewModelScope.launch {
+            repository.updateFolder(folder.copy(name = newName))
+        }
+    }
+
+    fun renameDocument(document: Document, newTitle: String) {
+        viewModelScope.launch {
+            repository.updateDocument(document.copy(title = newTitle))
         }
     }
 }

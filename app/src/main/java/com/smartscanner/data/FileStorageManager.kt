@@ -1,16 +1,19 @@
 package com.smartscanner.data
 
+import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
+import kotlin.coroutines.resume
 
 object FileStorageManager {
 
@@ -79,6 +82,55 @@ object FileStorageManager {
             if (file.exists()) file.delete() else false
         } catch (e: Exception) {
             false
+        }
+    }
+
+    suspend fun renamePhysicalFile(context: Context, currentPath: String, newName: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val oldFile = File(currentPath)
+            if (!oldFile.exists()) return@withContext null
+            
+            val newFile = File(oldFile.parent, newName)
+            if (oldFile.renameTo(newFile)) {
+                // Ép hệ thống scan lại cả 2 file để cập nhật MediaStore
+                scanFile(context, oldFile.absolutePath)
+                scanFile(context, newFile.absolutePath)
+                newFile.absolutePath
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun scanFile(context: Context, filePath: String): Uri? = suspendCancellableCoroutine { continuation ->
+        android.media.MediaScannerConnection.scanFile(
+            context,
+            arrayOf(filePath),
+            null
+        ) { _, uri ->
+            continuation.resume(uri)
+        }
+    }
+
+    fun getContentUriFromPath(context: Context, filePath: String): Uri? {
+        val uri = MediaStore.Files.getContentUri("external")
+        val projection = arrayOf(MediaStore.Files.FileColumns._ID)
+        val selection = MediaStore.Files.FileColumns.DATA + "=?"
+        val selectionArgs = arrayOf(filePath)
+
+        return try {
+            val cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
+                    ContentUris.withAppendedId(uri, id)
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying MediaStore", e)
+            null
         }
     }
 }

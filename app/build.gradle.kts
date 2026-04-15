@@ -61,6 +61,9 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.converter.gson)
 
+    // Local Broadcast Manager
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+
     // Room Database
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
