@@ -43,6 +43,23 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         initialValue = emptyList()
     )
 
+    // Search results logic
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery = _searchQuery.asStateFlow()
+
+    val searchResults: StateFlow<List<Document>> = combine(_searchQuery, databaseDocuments, _downloadFiles) { query, dbDocs, dlFiles ->
+        if (query.isBlank()) emptyList()
+        else {
+            (dbDocs + dlFiles)
+                .filter { it.title.contains(query, ignoreCase = true) }
+                .sortedByDescending { it.createdAt }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     init {
         syncDownloads()
     }
@@ -66,6 +83,10 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         }
     }
 
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
     fun createFolder(name: String, parentFolderId: Int? = null) {
         viewModelScope.launch {
             repository.insertFolder(name, parentFolderId)
@@ -86,10 +107,31 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         }
     }
 
-    fun moveDocumentsToFolder(documents: List<Document>, folderId: Int) {
+    fun moveDocumentsToFolder(documents: List<Document>, folderId: Int?) {
         viewModelScope.launch {
             documents.forEach { doc ->
-                repository.updateDocument(doc.copy(folderId = folderId))
+                if (doc.folderId != -1) {
+                    repository.updateDocument(doc.copy(folderId = folderId))
+                }
+            }
+        }
+    }
+
+    fun moveItemsToFolder(items: List<Any>, targetFolderId: Int?) {
+        viewModelScope.launch {
+            items.forEach { item ->
+                when (item) {
+                    is Document -> {
+                        if (item.folderId != -1) {
+                            repository.updateDocument(item.copy(folderId = targetFolderId))
+                        }
+                    }
+                    is Folder -> {
+                        if (item.id != targetFolderId) {
+                            repository.updateFolder(item.copy(parentFolderId = targetFolderId))
+                        }
+                    }
+                }
             }
         }
     }

@@ -28,10 +28,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -49,20 +51,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
 import com.smartscanner.data.*
 import com.smartscanner.ui.CameraCaptureActivity
 import com.smartscanner.ui.FilesViewModel
@@ -72,6 +84,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,6 +206,7 @@ private data class RecentFile(
     val date: String,
     val type: ExplorerType,
     val highlighted: Boolean = false,
+    val filePath: String? = null
 )
 
 private data class ExplorerItem(
@@ -280,7 +294,7 @@ private fun HomeScreen(viewModel: FilesViewModel) {
     val context = LocalContext.current as MainActivity
 
     Column(modifier = Modifier.fillMaxSize()) {
-        BlueHeader(showShortcuts = false)
+        BlueHeader(showShortcuts = false, viewModel = viewModel)
         Text(
             text = "Recent files",
             color = Color(0xFF101010),
@@ -304,7 +318,8 @@ private fun HomeScreen(viewModel: FilesViewModel) {
                         file = RecentFile(
                             title = doc.title,
                             date = dateFormat.format(Date(doc.createdAt)),
-                            type = mapFileType(doc.fileType)
+                            type = mapFileType(doc.fileType),
+                            filePath = doc.filePath
                         ),
                         onClick = { context.openFile(doc.filePath, doc.fileType) }
                     )
@@ -331,6 +346,11 @@ private fun FilesScreen(
     var openedFolder by remember { mutableStateOf<Folder?>(null) }
     var selectedItems by remember { mutableStateOf(setOf<Any>()) }
     val isSelectionMode = selectedItems.isNotEmpty()
+
+    // Drag and Drop State
+    val folderTargets = remember { mutableStateMapOf<Int, Rect>() }
+    var backTarget by remember { mutableStateOf<Rect?>(null) }
+    var dragPosition by remember { mutableStateOf<Offset?>(null) }
 
     var itemToRename by remember { mutableStateOf<Any?>(null) }
     var renameValue by remember { mutableStateOf("") }
@@ -417,144 +437,203 @@ private fun FilesScreen(
         items
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        BlueHeader(
-            showShortcuts = true,
-            isSelectionMode = isSelectionMode,
-            onUploadFile = onUploadFile,
-            onUploadImage = onUploadImage,
-            onCreateFolder = { viewModel.createFolder("New Folder", openedFolder?.id) },
-            onDeleteSelected = {
-                val itemsList = selectedItems.toList()
-                val docsToTrash = mutableListOf<Uri>()
-                context.lifecycleScope.launch {
-                    itemsList.forEach { item ->
-                        when (item) {
-                            is Document -> {
-                                if (item.folderId == -1) {
-                                    FileStorageManager.getContentUriFromPath(context, item.filePath)?.let { uri ->
-                                        docsToTrash.add(uri)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            BlueHeader(
+                showShortcuts = true,
+                isSelectionMode = isSelectionMode,
+                viewModel = viewModel,
+                onUploadFile = onUploadFile,
+                onUploadImage = onUploadImage,
+                onCreateFolder = { viewModel.createFolder("New Folder", openedFolder?.id) },
+                onDeleteSelected = {
+                    val itemsList = selectedItems.toList()
+                    val docsToTrash = mutableListOf<Uri>()
+                    context.lifecycleScope.launch {
+                        itemsList.forEach { item ->
+                            when (item) {
+                                is Document -> {
+                                    if (item.folderId == -1) {
+                                        FileStorageManager.getContentUriFromPath(context, item.filePath)?.let { uri ->
+                                            docsToTrash.add(uri)
+                                        }
+                                    } else {
+                                        viewModel.deleteDocument(item)
                                     }
-                                } else {
-                                    viewModel.deleteDocument(item)
                                 }
+                                is Folder -> viewModel.deleteFolder(item)
                             }
-                            is Folder -> viewModel.deleteFolder(item)
                         }
-                    }
-                    if (docsToTrash.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        try {
-                            val pendingIntent = MediaStore.createTrashRequest(context.contentResolver, docsToTrash, true)
-                            trashLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
-                        } catch (e: Exception) {
-                            itemsList.filterIsInstance<Document>().filter { it.folderId == -1 }.forEach {
-                                FileStorageManager.deletePhysicalFile(it.filePath)
+                        if (docsToTrash.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            try {
+                                val pendingIntent = MediaStore.createTrashRequest(context.contentResolver, docsToTrash, true)
+                                trashLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                            } catch (e: Exception) {
+                                itemsList.filterIsInstance<Document>().filter { it.folderId == -1 }.forEach {
+                                    FileStorageManager.deletePhysicalFile(it.filePath)
+                                }
+                                viewModel.syncDownloads()
                             }
+                        } else if (itemsList.any { it is Document && it.folderId == -1 }) {
                             viewModel.syncDownloads()
                         }
-                    } else if (itemsList.any { it is Document && it.folderId == -1 }) {
-                        viewModel.syncDownloads()
+                    }
+                    selectedItems = emptySet()
+                },
+                onShareSelected = { /* Handle share */ },
+                onMoveToNewFolder = {
+                    val selectedDocs = selectedItems.filterIsInstance<Document>()
+                    if (selectedDocs.isNotEmpty()) {
+                        val count = selectedDocs.size
+                        viewModel.createFolderAndMoveDocuments("New Grouped Folder", selectedDocs, openedFolder?.id)
+                        Toast.makeText(context, "Moved $count files", Toast.LENGTH_SHORT).show()
+                    }
+                    selectedItems = emptySet()
+                }
+            )
+            
+            if (showingDownloads || openedFolder != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .onGloballyPositioned { backTarget = it.boundsInRoot() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack, 
+                        null, 
+                        modifier = Modifier.clickable { 
+                            if (showingDownloads) {
+                                showingDownloads = false
+                            } else {
+                                val parentId = openedFolder?.parentFolderId
+                                openedFolder = if (parentId == null) null else folders.find { it.id == parentId }
+                            }
+                        }.size(24.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = if (showingDownloads) "Downloads" else openedFolder?.name ?: "Folder", 
+                        fontSize = 20.sp, 
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (explorerItems.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize().padding(bottom = 140.dp), contentAlignment = Alignment.Center) {
+                    Text("Your storage is empty", color = Color.Gray)
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 140.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                ) {
+                    items(
+                        items = explorerItems,
+                        key = {
+                            when (val original = it.originalItem) {
+                                is Folder -> "folder_${original.id}"
+                                is Document -> "doc_${original.id}"
+                                else -> it.title
+                            }
+                        }
+                    ) { item ->
+                        val isSelected = remember(item.originalItem, selectedItems) {
+                            item.originalItem?.let { selectedItems.contains(it) } ?: false
+                        }
+                        ExplorerGridItem(
+                            item = item,
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onClick = {
+                                if (isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                    val current = selectedItems.toMutableSet()
+                                    if (isSelected) current.remove(item.originalItem)
+                                    else current.add(item.originalItem)
+                                    selectedItems = current
+                                } else {
+                                    when (val original = item.originalItem) {
+                                        "VIRTUAL_DOWNLOADS" -> showingDownloads = true
+                                        is Folder -> openedFolder = original
+                                        is Document -> {
+                                            context.openFile(original.filePath, original.fileType)
+                                        }
+                                    }
+                                }
+                            },
+                            onLongClick = {
+                                if (!isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                    selectedItems = setOf(item.originalItem)
+                                }
+                            },
+                            onDoubleClick = {
+                                if (item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
+                                    itemToRename = item.originalItem
+                                    renameValue = when (val original = item.originalItem) {
+                                        is Folder -> original.name
+                                        is Document -> original.title.substringBeforeLast(".", original.title)
+                                        else -> ""
+                                    }
+                                }
+                            },
+                            onDragStarted = { rootOffset ->
+                                dragPosition = rootOffset
+                            },
+                            onDragMoved = { amount ->
+                                dragPosition = dragPosition?.plus(amount)
+                            },
+                            onDragEnded = {
+                                dragPosition?.let { pos ->
+                                    val isOverBack = backTarget?.contains(pos) == true
+                                    if (isOverBack) {
+                                        val parentId = if (showingDownloads) null else openedFolder?.parentFolderId
+                                        val count = selectedItems.size
+                                        viewModel.moveItemsToFolder(selectedItems.toList(), parentId)
+                                        Toast.makeText(context, "Moved $count files", Toast.LENGTH_SHORT).show()
+                                        selectedItems = emptySet()
+                                    } else {
+                                        val targetFolderId = folderTargets.entries.find { it.value.contains(pos) }?.key
+                                        if (targetFolderId != null) {
+                                            val count = selectedItems.size
+                                            viewModel.moveItemsToFolder(selectedItems.toList(), targetFolderId)
+                                            Toast.makeText(context, "Moved $count files", Toast.LENGTH_SHORT).show()
+                                            selectedItems = emptySet()
+                                        }
+                                    }
+                                }
+                                dragPosition = null
+                            },
+                            modifier = Modifier.onGloballyPositioned { coords ->
+                                val original = item.originalItem
+                                if (original is Folder) {
+                                    folderTargets[original.id] = coords.boundsInRoot()
+                                }
+                            }
+                        )
                     }
                 }
-                selectedItems = emptySet()
-            },
-            onShareSelected = { /* Handle share */ },
-            onMoveToNewFolder = {
-                val selectedDocs = selectedItems.filterIsInstance<Document>()
-                if (selectedDocs.isNotEmpty()) {
-                    viewModel.createFolderAndMoveDocuments("New Grouped Folder", selectedDocs, openedFolder?.id)
-                }
-                selectedItems = emptySet()
-            }
-        )
-        
-        if (showingDownloads || openedFolder != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack, 
-                    null, 
-                    modifier = Modifier.clickable { 
-                        if (showingDownloads) {
-                            showingDownloads = false
-                        } else {
-                            val parentId = openedFolder?.parentFolderId
-                            openedFolder = if (parentId == null) null else folders.find { it.id == parentId }
-                        }
-                    }.size(24.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    text = if (showingDownloads) "Downloads" else openedFolder?.name ?: "Folder", 
-                    fontSize = 20.sp, 
-                    fontWeight = FontWeight.Bold
-                )
             }
         }
 
-        if (explorerItems.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(bottom = 140.dp), contentAlignment = Alignment.Center) {
-                Text("Your storage is empty", color = Color.Gray)
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 140.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+        // Drag Shadow UI
+        dragPosition?.let { pos ->
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }
+                    .zIndex(100f)
+                    .size(80.dp)
+                    .shadow(8.dp, RoundedCornerShape(12.dp))
+                    .background(AppBlue.copy(alpha = 0.9f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
             ) {
-                items(
-                    items = explorerItems,
-                    key = { 
-                        when (val original = it.originalItem) {
-                            is Folder -> "folder_${original.id}"
-                            is Document -> "doc_${original.id}"
-                            else -> it.title
-                        }
-                    }
-                ) { item ->
-                    val isSelected = remember(item.originalItem, selectedItems) {
-                        item.originalItem?.let { selectedItems.contains(it) } ?: false
-                    }
-                    ExplorerGridItem(
-                        item = item,
-                        isSelectionMode = isSelectionMode,
-                        isSelected = isSelected,
-                        onClick = {
-                            if (isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
-                                val current = selectedItems.toMutableSet()
-                                if (isSelected) current.remove(item.originalItem)
-                                else current.add(item.originalItem)
-                                selectedItems = current
-                            } else {
-                                when (val original = item.originalItem) {
-                                    "VIRTUAL_DOWNLOADS" -> showingDownloads = true
-                                    is Folder -> openedFolder = original
-                                    is Document -> {
-                                        context.openFile(original.filePath, original.fileType)
-                                    }
-                                }
-                            }
-                        },
-                        onLongClick = {
-                            if (!isSelectionMode && item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
-                                selectedItems = setOf(item.originalItem)
-                            }
-                        },
-                        onDoubleClick = {
-                            if (item.originalItem != null && item.originalItem != "VIRTUAL_DOWNLOADS") {
-                                itemToRename = item.originalItem
-                                renameValue = when (val original = item.originalItem) {
-                                    is Folder -> original.name
-                                    is Document -> original.title.substringBeforeLast(".", original.title)
-                                    else -> ""
-                                }
-                            }
-                        }
-                    )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Outlined.ContentCopy, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    Text("${selectedItems.size}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -600,7 +679,7 @@ private fun ToolsScreen() {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            items(toolItems) { item -> 
+            items(toolItems) { item ->
                 ToolCard(item = item) {
                     if (item.title == "Text Summarization") {
                         context.startActivity(Intent(context, TextSummarizerActivity::class.java))
@@ -621,6 +700,7 @@ private fun OptionsScreen() {
 @Composable
 private fun BlueHeader(
     showShortcuts: Boolean,
+    viewModel: FilesViewModel,
     isSelectionMode: Boolean = false,
     onUploadFile: () -> Unit = {},
     onUploadImage: () -> Unit = {},
@@ -638,7 +718,7 @@ private fun BlueHeader(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            SearchPill()
+            SearchPill(viewModel)
             if (showShortcuts) {
                 Spacer(modifier = Modifier.height(25.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -661,13 +741,84 @@ private fun BlueHeader(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SearchPill() {
-    Surface(color = Color(0xFFF6F6F6), shape = RoundedCornerShape(30.dp), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Search, null, tint = Color(0xFF171717), modifier = Modifier.size(30.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Search for any file!", color = Color(0xFF171717), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+private fun SearchPill(viewModel: FilesViewModel) {
+    val query by viewModel.searchQuery.collectAsState()
+    val results by viewModel.searchResults.collectAsState()
+    val context = LocalContext.current as MainActivity
+    val dateFormat = remember { SimpleDateFormat("HH:mm dd/MM/yyyy", Locale.getDefault()) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            color = Color(0xFFF6F6F6), 
+            shape = RoundedCornerShape(30.dp), 
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp), 
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.Search, null, tint = Color(0xFF171717), modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+                TextField(
+                    value = query,
+                    onValueChange = { viewModel.setSearchQuery(it) },
+                    placeholder = { Text("Search for any file!", color = Color.Gray, fontSize = 16.sp) },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        if (query.isNotEmpty()) {
+            Popup(
+                alignment = Alignment.TopCenter,
+                offset = IntOffset(0, 160),
+                onDismissRequest = { viewModel.setSearchQuery("") }
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .heightIn(max = 400.dp)
+                        .shadow(8.dp, RoundedCornerShape(16.dp)),
+                    color = Color.White,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    if (results.isEmpty()) {
+                        Box(Modifier.padding(20.dp), contentAlignment = Alignment.Center) {
+                            Text("No files found", color = Color.Gray)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            items(results) { doc ->
+                                RecentFileRow(
+                                    file = RecentFile(
+                                        title = doc.title,
+                                        date = dateFormat.format(Date(doc.createdAt)),
+                                        type = mapFileType(doc.fileType),
+                                        filePath = doc.filePath
+                                    ),
+                                    onClick = { 
+                                        viewModel.setSearchQuery("")
+                                        context.openFile(doc.filePath, doc.fileType) 
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -675,8 +826,8 @@ private fun SearchPill() {
 @Composable
 private fun ShortcutButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
     Surface(
-        color = Color(0xFFF4F4F4), 
-        shape = RoundedCornerShape(22.dp), 
+        color = Color(0xFFF4F4F4),
+        shape = RoundedCornerShape(22.dp),
         modifier = modifier.height(104.dp).clickable { onClick() }
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
@@ -692,19 +843,17 @@ private fun RecentFileRow(file: RecentFile, onClick: () -> Unit = {}) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 8.dp), 
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(modifier = Modifier.size(80.dp).scale(0.8f), contentAlignment = Alignment.Center) {
-            FileOrFolderIcon(file.type)
+            FileOrFolderIcon(file.type, file.filePath)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(file.title, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(file.date, color = Color.Gray, fontSize = 12.sp)
         }
-        Spacer(Modifier.width(20.dp))
-        Box(Modifier.size(22.dp).border(1.5.dp, Color.Gray))
     }
 }
 
@@ -712,36 +861,59 @@ private fun RecentFileRow(file: RecentFile, onClick: () -> Unit = {}) {
 @Composable
 private fun ExplorerGridItem(
     item: ExplorerItem, 
+    modifier: Modifier = Modifier,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false, 
     onClick: () -> Unit = {}, 
     onLongClick: () -> Unit = {},
-    onDoubleClick: () -> Unit = {}
+    onDoubleClick: () -> Unit = {},
+    onDragStarted: (Offset) -> Unit = {},
+    onDragMoved: (Offset) -> Unit = {},
+    onDragEnded: () -> Unit = {}
 ) {
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnLongClick by rememberUpdatedState(onLongClick)
     val currentOnDoubleClick by rememberUpdatedState(onDoubleClick)
+    
+    var layoutCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
+            .onGloballyPositioned { layoutCoordinates = it }
             .border(
                 width = if (isSelected) 2.dp else 0.dp,
                 color = if (isSelected) AppBlue else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
             .pointerInput(item, isSelectionMode, isSelected) {
-                detectTapGestures(
-                    onTap = { currentOnClick() },
-                    onDoubleTap = { currentOnDoubleClick() },
-                    onLongPress = { currentOnLongClick() }
-                )
+                if (isSelectionMode && isSelected) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            val rootOffset = layoutCoordinates?.localToRoot(offset) ?: offset
+                            onDragStarted(rootOffset)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            onDragMoved(dragAmount)
+                        },
+                        onDragEnd = { onDragEnded() },
+                        onDragCancel = { onDragEnded() }
+                    )
+                } else {
+                    detectTapGestures(
+                        onTap = { currentOnClick() },
+                        onDoubleTap = { currentOnDoubleClick() },
+                        onLongPress = { currentOnLongClick() }
+                    )
+                }
             }
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(modifier = Modifier.height(120.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Box(Modifier.scale(0.9f)) { FileOrFolderIcon(item.type) }
+            val doc = item.originalItem as? Document
+            Box(Modifier.scale(0.9f)) { FileOrFolderIcon(item.type, doc?.filePath) }
         }
         Spacer(Modifier.height(8.dp))
         Text(item.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -750,16 +922,28 @@ private fun ExplorerGridItem(
 }
 
 @Composable
-private fun FileOrFolderIcon(type: ExplorerType) {
-    when (type) {
-        ExplorerType.Folder -> FolderGlyph()
-        ExplorerType.Png -> FileGlyph("IMG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
-        ExplorerType.Xls -> FileGlyph("XLS", Color(0xFF3DBA7C), Color(0xFF188D56), Color(0xFF127A48))
-        ExplorerType.Csv -> FileGlyph("CSV", Color(0xFF58A8E2), Color(0xFF2A73BA), Color(0xFF2163A6))
-        ExplorerType.Pdf -> FileGlyph("PDF", Color(0xFFE57373), Color(0xFFC62828), Color(0xFFB71C1C))
-        ExplorerType.Doc -> FileGlyph("DOC", Color(0xFF64B5F6), Color(0xFF1976D2), Color(0xFF0D47A1))
-        ExplorerType.Ppt -> FileGlyph("PPT", Color(0xFFFFB74D), Color(0xFFF57C00), Color(0xFFE65100))
-        ExplorerType.GenericFile -> FileGlyph("FILE", Color(0xFF9E9E9E), Color(0xFF616161), Color(0xFF424242))
+private fun FileOrFolderIcon(type: ExplorerType, filePath: String? = null) {
+    if (type == ExplorerType.Png && filePath != null) {
+        AsyncImage(
+            model = File(filePath),
+            contentDescription = null,
+            modifier = Modifier
+                .width(80.dp)
+                .height(100.dp)
+                .clip(RoundedCornerShape(8.dp)),
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        when (type) {
+            ExplorerType.Folder -> FolderGlyph()
+            ExplorerType.Png -> FileGlyph("IMG", Color(0xFF5FADE3), Color(0xFF3077BD), Color(0xFF2368AE))
+            ExplorerType.Xls -> FileGlyph("XLS", Color(0xFF3DBA7C), Color(0xFF188D56), Color(0xFF127A48))
+            ExplorerType.Csv -> FileGlyph("CSV", Color(0xFF58A8E2), Color(0xFF2A73BA), Color(0xFF2163A6))
+            ExplorerType.Pdf -> FileGlyph("PDF", Color(0xFFE57373), Color(0xFFC62828), Color(0xFFB71C1C))
+            ExplorerType.Doc -> FileGlyph("DOC", Color(0xFF64B5F6), Color(0xFF1976D2), Color(0xFF0D47A1))
+            ExplorerType.Ppt -> FileGlyph("PPT", Color(0xFFFFB74D), Color(0xFFF57C00), Color(0xFFE65100))
+            ExplorerType.GenericFile -> FileGlyph("FILE", Color(0xFF9E9E9E), Color(0xFF616161), Color(0xFF424242))
+        }
     }
 }
 
