@@ -23,6 +23,7 @@ import com.smartscanner.databinding.ActivityCameraCaptureBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -166,12 +167,13 @@ class CameraCaptureActivity : AppCompatActivity() {
                 val timestamp = System.currentTimeMillis()
                 val fileName = "SCAN_$timestamp.jpg"
 
-                // 1. Save physical file
+                // 1. Save physical file (FileStorageManager handles unique naming)
                 val filePath = withContext(Dispatchers.IO) {
                     FileStorageManager.saveImageToInternalStorage(this@CameraCaptureActivity, bitmap, fileName)
                 }
 
                 if (filePath != null) {
+                    val actualFileName = File(filePath).name
                     // 2. Save to Room Database
                     withContext(Dispatchers.IO) {
                         val database = AppDatabase.getDatabase(this@CameraCaptureActivity)
@@ -179,7 +181,7 @@ class CameraCaptureActivity : AppCompatActivity() {
                         
                         val newDoc = Document(
                             folderId = null,
-                            title = fileName,
+                            title = actualFileName,
                             filePath = filePath,
                             fileType = "image/jpeg",
                             createdAt = timestamp
@@ -187,7 +189,7 @@ class CameraCaptureActivity : AppCompatActivity() {
                         repository.insertDocument(newDoc)
                     }
 
-                    Toast.makeText(this@CameraCaptureActivity, "Document saved successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@CameraCaptureActivity, "Document saved: $actualFileName", Toast.LENGTH_SHORT).show()
                     finish()
                 } else {
                     throw Exception("Failed to save physical file")

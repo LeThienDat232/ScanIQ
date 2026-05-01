@@ -23,13 +23,37 @@ object FileStorageManager {
 
     private const val TAG = "FileStorageManager"
 
+    /**
+     * Generates a unique file name in the specified directory.
+     * If a file with the same name exists, it appends (1), (2), etc.
+     */
+    private fun getUniqueFileName(directory: File, fileName: String): String {
+        var name = fileName
+        var extension = ""
+        val lastDotIndex = fileName.lastIndexOf('.')
+        if (lastDotIndex != -1) {
+            name = fileName.substring(0, lastDotIndex)
+            extension = fileName.substring(lastDotIndex)
+        }
+
+        var uniqueName = fileName
+        var counter = 1
+        while (File(directory, uniqueName).exists()) {
+            uniqueName = "$name($counter)$extension"
+            counter++
+        }
+        return uniqueName
+    }
+
     suspend fun saveImageToInternalStorage(
         context: Context,
         bitmap: Bitmap,
         fileName: String
     ): String? = withContext(Dispatchers.IO) {
         val directory = context.filesDir
-        val file = File(directory, if (fileName.endsWith(".jpg")) fileName else "$fileName.jpg")
+        val baseName = if (fileName.lowercase().endsWith(".jpg")) fileName else "$fileName.jpg"
+        val uniqueName = getUniqueFileName(directory, baseName)
+        val file = File(directory, uniqueName)
         
         var fos: FileOutputStream? = null
         try {
@@ -45,8 +69,9 @@ object FileStorageManager {
     }
 
     suspend fun saveFileFromUri(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
-        val fileName = getFileName(context, uri) ?: "imported_${System.currentTimeMillis()}"
-        val file = File(context.filesDir, fileName)
+        val originalName = getFileName(context, uri) ?: "imported_${System.currentTimeMillis()}"
+        val uniqueName = getUniqueFileName(context.filesDir, originalName)
+        val file = File(context.filesDir, uniqueName)
         
         try {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -94,7 +119,10 @@ object FileStorageManager {
             val oldFile = File(currentPath)
             if (!oldFile.exists()) return@withContext null
             
-            val newFile = File(oldFile.parent, newName)
+            val parentDir = oldFile.parentFile ?: context.filesDir
+            val uniqueNewName = getUniqueFileName(parentDir, newName)
+            val newFile = File(parentDir, uniqueNewName)
+            
             if (oldFile.renameTo(newFile)) {
                 scanFile(context, oldFile.absolutePath)
                 scanFile(context, newFile.absolutePath)
@@ -156,8 +184,9 @@ object FileStorageManager {
                 }
             }
             
-            val finalName = if (outputFileName.lowercase().endsWith(".pdf")) outputFileName else "$outputFileName.pdf"
-            val file = File(context.filesDir, finalName)
+            val baseName = if (outputFileName.lowercase().endsWith(".pdf")) outputFileName else "$outputFileName.pdf"
+            val uniqueName = getUniqueFileName(context.filesDir, baseName)
+            val file = File(context.filesDir, uniqueName)
             FileOutputStream(file).use { outputStream ->
                 pdfDocument.writeTo(outputStream)
             }

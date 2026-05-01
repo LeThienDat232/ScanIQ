@@ -146,7 +146,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val filePath = FileStorageManager.saveFileFromUri(this@MainActivity, uri)
             if (filePath != null) {
-                val fileName = FileStorageManager.getFileName(this@MainActivity, uri) ?: "Imported File"
+                val actualFile = File(filePath)
+                val fileName = actualFile.name
                 val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
                 
                 val newDoc = Document(
@@ -393,14 +394,7 @@ private fun FilesScreen(
                     context.lifecycleScope.launch {
                         when (val item = itemToRename) {
                             is Folder -> viewModel.renameFolder(item, finalName)
-                            is Document -> {
-                                if (item.folderId == -1) {
-                                    FileStorageManager.renamePhysicalFile(context, item.filePath, finalName)
-                                    viewModel.syncDownloads()
-                                } else {
-                                    viewModel.renameDocument(item, finalName)
-                                }
-                            }
+                            is Document -> viewModel.renameDocument(context, item, finalName)
                         }
                         itemToRename = null
                     }
@@ -816,13 +810,14 @@ private fun ToolsScreen(viewModel: FilesViewModel) {
                         val path = FileStorageManager.convertImagesToPdf(context, uris, pdfName)
 
                         if (path != null) {
+                            val actualFileName = File(path).name
                             viewModel.insertDocument(
                                 folderId = null,
-                                title = if (pdfName.endsWith(".pdf")) pdfName else "$pdfName.pdf",
+                                title = actualFileName,
                                 filePath = path,
                                 fileType = "application/pdf"
                             )
-                            Toast.makeText(context, "PDF Created", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "PDF Created: $actualFileName", Toast.LENGTH_SHORT).show()
                             selectedDocsForPdf = emptySet()
                         } else {
                             Toast.makeText(context, "Failed to create PDF", Toast.LENGTH_SHORT).show()

@@ -1,5 +1,6 @@
 package com.smartscanner.ui
 
+import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.webkit.MimeTypeMap
@@ -7,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.smartscanner.data.Document
 import com.smartscanner.data.DocumentRepository
+import com.smartscanner.data.FileStorageManager
 import com.smartscanner.data.Folder
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -14,7 +16,6 @@ import java.io.File
 
 class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
 
-    // Database Folders
     val folders: StateFlow<List<Folder>> = repository.getAllFolders()
         .stateIn(
             scope = viewModelScope,
@@ -22,7 +23,6 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
             initialValue = emptyList()
         )
 
-    // Database Documents
     val databaseDocuments: StateFlow<List<Document>> = repository.getRecentDocuments()
         .stateIn(
             scope = viewModelScope,
@@ -30,11 +30,9 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
             initialValue = emptyList()
         )
 
-    // Synced Files from Downloads folder
     private val _downloadFiles = MutableStateFlow<List<Document>>(emptyList())
     val downloadFiles: StateFlow<List<Document>> = _downloadFiles.asStateFlow()
 
-    // Combined Recent Files (DB + Downloads)
     val recentDocuments: StateFlow<List<Document>> = combine(databaseDocuments, _downloadFiles) { dbDocs, dlFiles ->
         (dbDocs + dlFiles).sortedByDescending { it.createdAt }.take(20)
     }.stateIn(
@@ -43,7 +41,6 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         initialValue = emptyList()
     )
 
-    // Search results logic
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
 
@@ -60,23 +57,8 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         initialValue = emptyList()
     )
 
-    // PDF Conversion State
-    private val _pendingUris = MutableStateFlow<List<Uri>>(emptyList())
-    val pendingUris = _pendingUris.asStateFlow()
-
-    private val _pendingDocuments = MutableStateFlow<List<Document>>(emptyList())
-    val pendingDocuments = _pendingDocuments.asStateFlow()
-
     init {
         syncDownloads()
-    }
-
-    fun setPendingUris(uris: List<Uri>) {
-        _pendingUris.value = uris
-    }
-
-    fun setPendingDocuments(docs: List<Document>) {
-        _pendingDocuments.value = docs
     }
 
     fun syncDownloads() {
@@ -87,7 +69,7 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
                 val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
                 Document(
                     id = file.absolutePath.hashCode(),
-                    folderId = -1, // Mark as "in Downloads"
+                    folderId = -1,
                     title = file.name,
                     filePath = file.absolutePath,
                     fileType = mime,
@@ -117,7 +99,15 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
 
     fun createFolder(name: String, parentFolderId: Int? = null) {
         viewModelScope.launch {
-            repository.insertFolder(name, parentFolderId)
+            // Đảm bảo tên folder cũng không trùng trong cùng 1 cấp
+            val existingFolders = folders.value.filter { it.parentFolderId == parentFolderId }
+            var uniqueName = name
+            var counter = 1
+            while (existingFolders.any { it.name.equals(uniqueName, ignoreCase = true) }) {
+                uniqueName = "$name($counter)"
+                counter++
+            }
+            repository.insertFolder(uniqueName, parentFolderId)
         }
     }
 
@@ -132,16 +122,6 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
     fun deleteFolder(folder: Folder) {
         viewModelScope.launch {
             repository.deleteFolder(folder)
-        }
-    }
-
-    fun moveDocumentsToFolder(documents: List<Document>, folderId: Int?) {
-        viewModelScope.launch {
-            documents.forEach { doc ->
-                if (doc.folderId != -1) {
-                    repository.updateDocument(doc.copy(folderId = folderId))
-                }
-            }
         }
     }
 
@@ -166,20 +146,49 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
 
     fun createFolderAndMoveDocuments(folderName: String, documents: List<Document>, parentFolderId: Int? = null) {
         viewModelScope.launch {
-            val folderId = repository.insertFolder(folderName, parentFolderId).toInt()
-            moveDocumentsToFolder(documents, folderId)
+            val existingFolders = folders.value.filter { it.parentFolderId == parentFolderId }
+            var uniqueName = folderName
+            var counter = 1
+            while (existingFolders.any { it.name.equals(uniqueName, ignoreCase = true) }) {
+                uniqueName = "$folderName($counter)"
+                counter++
+            }
+            val folderId = repository.insertFolder(uniqueName, parentFolderId).toInt()
+            documents.forEach { doc ->
+                if (doc.folderId != -1) {
+                    repository.updateDocument(doc.copy(folderId = folderId))
+                }
+            }
         }
     }
 
     fun renameFolder(folder: Folder, newName: String) {
         viewModelScope.launch {
-            repository.updateFolder(folder.copy(name = newName))
+            val existingFolders = folders.value.filter { it.parentFolderId == folder.parentFolderId && it.id != folder.id }
+            var uniqueName = newName
+            var counter = 1
+            while (existingFolders.any { it.name.equals(uniqueName, ignoreCase = true) }) {
+                uniqueName = "$newName($counter)"
+                counter++
+            }
+            repository.updateFolder(folder.copy(name = uniqueName))
         }
     }
 
-    fun renameDocument(document: Document, newTitle: String) {
+    fun renameDocument(context: Context, document: Document, newTitle: String) {
         viewModelScope.launch {
-            repository.updateDocument(document.copy(title = newTitle))
+            if (document.folderId == -1) {
+                // Tệp ngoài (Downloads)
+                val newPath = FileStorageManager.renamePhysicalFile(context, document.filePath, newTitle)
+                if (newPath != null) syncDownloads()
+            } else {
+                // Tệp trong ứng dụng (Internal Storage)
+                val newPath = FileStorageManager.renamePhysicalFile(context, document.filePath, newTitle)
+                if (newPath != null) {
+                    val actualName = File(newPath).name
+                    repository.updateDocument(document.copy(title = actualName, filePath = newPath))
+                }
+            }
         }
     }
 }
