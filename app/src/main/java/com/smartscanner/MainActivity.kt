@@ -2,6 +2,8 @@ package com.smartscanner
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -27,7 +29,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -37,11 +38,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.*
@@ -67,6 +72,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
@@ -75,10 +82,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.smartscanner.data.*
 import com.smartscanner.ui.CameraCaptureActivity
 import com.smartscanner.ui.FilesViewModel
-import com.smartscanner.ui.TextSummarizerActivity
 import com.smartscanner.ui.theme.SmartScannerTheme
 import kotlinx.coroutines.launch
 import java.io.File
@@ -223,6 +232,8 @@ private data class ToolItem(
     val color: Color = AppBlue
 )
 
+private enum class ToolPickerMode { NONE, PDF, OCR }
+
 @Composable
 private fun SmartScannerApp(viewModel: FilesViewModel) {
     var selectedTab by remember { mutableStateOf(BottomTab.Home) }
@@ -272,7 +283,7 @@ private fun SmartScannerApp(viewModel: FilesViewModel) {
                     onUploadImage = { imagePickerLauncher.launch("image/*") },
                     trashLauncher = trashLauncher
                 )
-                BottomTab.Tools -> ToolsScreen()
+                BottomTab.Tools -> ToolsScreen(viewModel)
                 BottomTab.Options -> OptionsScreen()
             }
         }
@@ -653,16 +664,178 @@ private fun mapFileType(mimeType: String): ExplorerType {
 }
 
 @Composable
-private fun ToolsScreen() {
-    val context = LocalContext.current
+private fun ToolsScreen(viewModel: FilesViewModel) {
+    val context = LocalContext.current as MainActivity
+    val dbDocuments by viewModel.databaseDocuments.collectAsState()
     val toolItems = listOf(
+        ToolItem("PDF Converter", Icons.Outlined.PictureAsPdf, "Merge scans into one PDF", color = Color(0xFFE57373)),
         ToolItem("Text Extract", Icons.Outlined.Description, "Convert images to editable text"),
-        ToolItem("Text Summarization", Icons.Outlined.Summarize, "AI-powered doc summary", color = Color(0xFFEF5350)),
-        ToolItem("Image Edit", Icons.Outlined.Edit, "Crop and filter images"),
-        ToolItem("PDF Export", Icons.Outlined.PictureAsPdf, "Save as high quality PDF"),
-        ToolItem("File Cleaner", Icons.Outlined.CleaningServices, "Optimize storage"),
-        ToolItem("Smart Search", Icons.Outlined.AutoAwesome, "Find text in images"),
+        ToolItem("File Cleaner", Icons.Outlined.CleaningServices, "Optimize your storage", color = Color(0xFF81C784)),
+        ToolItem("Secure Vault", Icons.Outlined.Lock, "Hide your private files", color = Color(0xFF64B5F6)),
     )
+    
+    var pickerMode by remember { mutableStateOf(ToolPickerMode.NONE) }
+    var showPdfDialog by remember { mutableStateOf(false) }
+    var selectedDocsForPdf by remember { mutableStateOf(setOf<Document>()) }
+
+    // OCR State
+    var extractedText by remember { mutableStateOf("") }
+    var showOcrResult by remember { mutableStateOf(false) }
+
+    if (showOcrResult) {
+        AlertDialog(
+            onDismissRequest = { showOcrResult = false },
+            title = { Text("Extracted Text") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(extractedText)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Extracted Text", extractedText)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                }) { Text("Copy") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOcrResult = false }) { Text("Close") }
+            }
+        )
+    }
+
+    if (pickerMode != ToolPickerMode.NONE) {
+        val imageFiles = remember(dbDocuments) { dbDocuments.filter { it.fileType.contains("image", ignoreCase = true) } }
+        
+        Dialog(
+            onDismissRequest = { pickerMode = ToolPickerMode.NONE },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.White
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween) {
+                        IconButton(onClick = { pickerMode = ToolPickerMode.NONE }) {
+                            Icon(Icons.Default.Close, null)
+                        }
+                        Text(if (pickerMode == ToolPickerMode.PDF) "Select Images for PDF" else "Select Image for OCR", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        
+                        if (pickerMode == ToolPickerMode.PDF) {
+                            TextButton(
+                                enabled = selectedDocsForPdf.isNotEmpty(),
+                                onClick = {
+                                    val mode = pickerMode
+                                    pickerMode = ToolPickerMode.NONE
+                                    if (mode == ToolPickerMode.PDF) showPdfDialog = true
+                                }
+                            ) { Text("Next") }
+                        } else {
+                            Spacer(Modifier.width(48.dp))
+                        }
+                    }
+
+                    if (imageFiles.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No images found in app", color = Color.Gray)
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            contentPadding = PaddingValues(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(imageFiles) { doc ->
+                                val isSelected = selectedDocsForPdf.contains(doc)
+                                Box(
+                                    modifier = Modifier
+                                        .aspectRatio(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .border(2.dp, if (isSelected && pickerMode == ToolPickerMode.PDF) AppBlue else Color.Transparent, RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            if (pickerMode == ToolPickerMode.PDF) {
+                                                selectedDocsForPdf = if (isSelected) selectedDocsForPdf - doc else selectedDocsForPdf + doc
+                                            } else if (pickerMode == ToolPickerMode.OCR) {
+                                                pickerMode = ToolPickerMode.NONE
+                                                processImageOCR(context, Uri.fromFile(File(doc.filePath))) { text ->
+                                                    extractedText = text
+                                                    showOcrResult = true
+                                                }
+                                            }
+                                        }
+                                ) {
+                                    AsyncImage(
+                                        model = File(doc.filePath),
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    if (isSelected && pickerMode == ToolPickerMode.PDF) {
+                                        Box(Modifier.fillMaxSize().background(AppBlue.copy(0.2f)), contentAlignment = Alignment.TopEnd) {
+                                            Icon(Icons.Default.CheckCircle, null, tint = AppBlue, modifier = Modifier.padding(4.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPdfDialog) {
+        var pdfName by remember { mutableStateOf("Converted_Scan") }
+        AlertDialog(
+            onDismissRequest = { showPdfDialog = false },
+            title = { Text("Export to PDF") },
+            text = {
+                TextField(
+                    value = pdfName,
+                    onValueChange = { pdfName = it },
+                    label = { Text("File Name") },
+                    singleLine = true,
+                    suffix = { Text(".pdf") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.lifecycleScope.launch {
+                        val uris = selectedDocsForPdf.map { Uri.fromFile(File(it.filePath)) }
+                        val path = FileStorageManager.convertImagesToPdf(context, uris, pdfName)
+
+                        if (path != null) {
+                            viewModel.insertDocument(
+                                folderId = null,
+                                title = if (pdfName.endsWith(".pdf")) pdfName else "$pdfName.pdf",
+                                filePath = path,
+                                fileType = "application/pdf"
+                            )
+                            Toast.makeText(context, "PDF Created", Toast.LENGTH_SHORT).show()
+                            selectedDocsForPdf = emptySet()
+                        } else {
+                            Toast.makeText(context, "Failed to create PDF", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    showPdfDialog = false
+                }) { Text("Convert") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPdfDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(top = 20.dp, bottom = 110.dp)) {
         Text(
@@ -681,12 +854,42 @@ private fun ToolsScreen() {
         ) {
             items(toolItems) { item ->
                 ToolCard(item = item) {
-                    if (item.title == "Text Summarization") {
-                        context.startActivity(Intent(context, TextSummarizerActivity::class.java))
+                    when (item.title) {
+                        "PDF Converter" -> {
+                            selectedDocsForPdf = emptySet()
+                            pickerMode = ToolPickerMode.PDF
+                        }
+                        "Text Extract" -> {
+                            pickerMode = ToolPickerMode.OCR
+                        }
+                        "File Cleaner", "Secure Vault" -> {
+                            Toast.makeText(context, "Coming Soon", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+private fun processImageOCR(context: Context, uri: Uri, onSuccess: (String) -> Unit) {
+    try {
+        val image = InputImage.fromFilePath(context, uri)
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                if (visionText.text.isBlank()) {
+                    Toast.makeText(context, "No text found in image", Toast.LENGTH_SHORT).show()
+                } else {
+                    onSuccess(visionText.text)
+                }
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(context, "OCR Error: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+    } catch (e: Exception) {
+        Toast.makeText(context, "Failed to load image", Toast.LENGTH_SHORT).show()
     }
 }
 

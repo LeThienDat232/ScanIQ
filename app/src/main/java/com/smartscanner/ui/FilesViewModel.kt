@@ -60,8 +60,23 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
         initialValue = emptyList()
     )
 
+    // PDF Conversion State
+    private val _pendingUris = MutableStateFlow<List<Uri>>(emptyList())
+    val pendingUris = _pendingUris.asStateFlow()
+
+    private val _pendingDocuments = MutableStateFlow<List<Document>>(emptyList())
+    val pendingDocuments = _pendingDocuments.asStateFlow()
+
     init {
         syncDownloads()
+    }
+
+    fun setPendingUris(uris: List<Uri>) {
+        _pendingUris.value = uris
+    }
+
+    fun setPendingDocuments(docs: List<Document>) {
+        _pendingDocuments.value = docs
     }
 
     fun syncDownloads() {
@@ -85,6 +100,19 @@ class FilesViewModel(private val repository: DocumentRepository) : ViewModel() {
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun insertDocument(folderId: Int?, title: String, filePath: String, fileType: String) {
+        viewModelScope.launch {
+            val newDoc = Document(
+                folderId = folderId,
+                title = title,
+                filePath = filePath,
+                fileType = fileType,
+                createdAt = System.currentTimeMillis()
+            )
+            repository.insertDocument(newDoc)
+        }
     }
 
     fun createFolder(name: String, parentFolderId: Int? = null) {

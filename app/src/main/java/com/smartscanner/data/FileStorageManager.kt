@@ -3,6 +3,10 @@ package com.smartscanner.data
 import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -92,7 +96,6 @@ object FileStorageManager {
             
             val newFile = File(oldFile.parent, newName)
             if (oldFile.renameTo(newFile)) {
-                // Ép hệ thống scan lại cả 2 file để cập nhật MediaStore
                 scanFile(context, oldFile.absolutePath)
                 scanFile(context, newFile.absolutePath)
                 newFile.absolutePath
@@ -131,6 +134,39 @@ object FileStorageManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error querying MediaStore", e)
             null
+        }
+    }
+
+    suspend fun convertImagesToPdf(context: Context, imageUris: List<Uri>, outputFileName: String): String? = withContext(Dispatchers.IO) {
+        val pdfDocument = PdfDocument()
+        val paint = Paint()
+        
+        try {
+            imageUris.forEachIndexed { index, uri ->
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val bitmap = BitmapFactory.decodeStream(inputStream)
+                    if (bitmap != null) {
+                        val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, index + 1).create()
+                        val page = pdfDocument.startPage(pageInfo)
+                        val canvas: Canvas = page.canvas
+                        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+                        pdfDocument.finishPage(page)
+                        bitmap.recycle()
+                    }
+                }
+            }
+            
+            val finalName = if (outputFileName.lowercase().endsWith(".pdf")) outputFileName else "$outputFileName.pdf"
+            val file = File(context.filesDir, finalName)
+            FileOutputStream(file).use { outputStream ->
+                pdfDocument.writeTo(outputStream)
+            }
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating PDF", e)
+            null
+        } finally {
+            pdfDocument.close()
         }
     }
 }
