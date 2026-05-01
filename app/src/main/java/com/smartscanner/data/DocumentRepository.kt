@@ -16,7 +16,7 @@ class DocumentRepository(
     suspend fun deleteDocumentAndFile(document: Document) = withContext(Dispatchers.IO) {
         // 1. Delete the physical file first
         val isFileDeleted = FileStorageManager.deletePhysicalFile(document.filePath)
-        
+
         // 2. If file deleted successfully (or didn't exist), delete from DB
         if (isFileDeleted || !java.io.File(document.filePath).exists()) {
             documentDao.deleteDocument(document)
@@ -48,7 +48,7 @@ class DocumentRepository(
         // (Cách nhanh: Dùng Query Update trong Dao, nhưng ở đây dùng hàm Update cơ bản)
         // Lưu ý: Repository nên phối hợp với FolderDao
     }
-    
+
     suspend fun updateFolder(folder: Folder) = withContext(Dispatchers.IO) {
         folderDao.updateFolder(folder)
     }

@@ -61,6 +61,9 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.converter.gson)
 
+    // Coil
+    implementation(libs.coil.compose)
+
     // Local Broadcast Manager
     implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
 
@@ -75,6 +78,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.camera.extensions)
+
+    // ML Kit Text Recognition
+    implementation(libs.mlkit.text.recognition)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
