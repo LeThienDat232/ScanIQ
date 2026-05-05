@@ -2,10 +2,7 @@ package com.smartscanner
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
+import android.content.*
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -664,8 +661,6 @@ private fun ToolsScreen(viewModel: FilesViewModel) {
     val toolItems = listOf(
         ToolItem("PDF Converter", Icons.Outlined.PictureAsPdf, "Merge scans into one PDF", color = Color(0xFFE57373)),
         ToolItem("Text Extract", Icons.Outlined.Description, "Convert images to editable text"),
-        ToolItem("File Cleaner", Icons.Outlined.CleaningServices, "Optimize your storage", color = Color(0xFF81C784)),
-        ToolItem("Secure Vault", Icons.Outlined.Lock, "Hide your private files", color = Color(0xFF64B5F6)),
     )
     
     var pickerMode by remember { mutableStateOf(ToolPickerMode.NONE) }
@@ -856,9 +851,6 @@ private fun ToolsScreen(viewModel: FilesViewModel) {
                         }
                         "Text Extract" -> {
                             pickerMode = ToolPickerMode.OCR
-                        }
-                        "File Cleaner", "Secure Vault" -> {
-                            Toast.makeText(context, "Coming Soon", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
