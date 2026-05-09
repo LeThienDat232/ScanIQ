@@ -1,12 +1,17 @@
 package com.smartscanner;
 
+import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -26,6 +31,8 @@ import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -44,6 +51,8 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.lifecycle.ViewModelProvider;
 
@@ -72,6 +81,14 @@ import java.util.Objects;
 import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String PREFS_NAME = "smart_scanner_options";
+    private static final String PREF_THEME = "theme";
+    private static final String PREF_LANGUAGE = "language";
+    private static final String THEME_LIGHT = "light";
+    private static final String THEME_DARK = "dark";
+    private static final String LANGUAGE_EN = "en";
+    private static final String LANGUAGE_VI = "vi";
+
     private static final int APP_BLUE = Color.rgb(51, 103, 239);
     private static final int PAGE_BACKGROUND = Color.rgb(247, 248, 251);
     private static final int CARD_BACKGROUND = Color.WHITE;
@@ -111,9 +128,19 @@ public class MainActivity extends AppCompatActivity {
     private PopupWindow searchPopup;
     private LinearLayout searchPopupContent;
     private EditText searchAnchor;
+    private SharedPreferences optionsPrefs;
+    private String selectedTheme = THEME_LIGHT;
+    private String selectedLanguage = LANGUAGE_EN;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        optionsPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        selectedTheme = optionsPrefs.getString(PREF_THEME, THEME_LIGHT);
+        selectedLanguage = optionsPrefs.getString(PREF_LANGUAGE, LANGUAGE_EN);
+        AppCompatDelegate.setDefaultNightMode(
+                isDarkTheme() ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO
+        );
+
         super.onCreate(savedInstanceState);
 
         viewModel = new ViewModelProvider(this).get(FilesViewModel.class);
@@ -123,6 +150,14 @@ public class MainActivity extends AppCompatActivity {
         buildRootUi();
         observeViewModel();
         renderCurrentTab();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (contentContainer != null && selectedTab == BottomTab.OPTIONS) {
+            renderCurrentTab();
+        }
     }
 
     private void setupActivityResultLaunchers() {
@@ -186,7 +221,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildRootUi() {
         root = new FrameLayout(this);
-        root.setBackgroundColor(PAGE_BACKGROUND);
+        root.setBackgroundColor(pageBackground());
 
         contentContainer = new LinearLayout(this);
         contentContainer.setOrientation(LinearLayout.VERTICAL);
@@ -207,7 +242,7 @@ public class MainActivity extends AppCompatActivity {
         cameraButton = new FloatingActionButton(this);
         cameraButton.setImageResource(R.drawable.ic_camera);
         cameraButton.setColorFilter(Color.WHITE);
-        cameraButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(APP_BLUE));
+        cameraButton.setBackgroundTintList(ColorStateList.valueOf(appBlue()));
         cameraButton.setCompatElevation(dp(18));
         cameraButton.setElevation(dp(18));
         cameraButton.setTranslationZ(dp(18));
@@ -222,19 +257,18 @@ public class MainActivity extends AppCompatActivity {
 
     private FrameLayout createBottomNavDock() {
         FrameLayout dock = new FrameLayout(this);
-        dock.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dock.setPadding(0, 0, 0, 0);
         dock.setBackground(createGlassBackground());
         dock.setElevation(dp(8));
         dock.setTranslationZ(dp(8));
 
         navIndicator = new View(this);
-        navIndicator.setBackground(createRoundedBackground(Color.rgb(232, 240, 255), dp(22)));
+        navIndicator.setBackground(createRoundedBackground(navIndicatorColor(), dp(30)));
         FrameLayout.LayoutParams indicatorParams = new FrameLayout.LayoutParams(
                 dp(1),
-                dp(46),
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.START | Gravity.CENTER_VERTICAL
         );
-        indicatorParams.leftMargin = dp(8);
         dock.addView(navIndicator, indicatorParams);
 
         bottomNavItems = new LinearLayout(this);
@@ -244,7 +278,7 @@ public class MainActivity extends AppCompatActivity {
         tabButtons.clear();
         for (BottomTab tab : BottomTab.values()) {
             TextView button = new TextView(this);
-            button.setText(tab.label);
+            button.setText(tabLabel(tab));
             button.setGravity(Gravity.CENTER);
             button.setTextSize(13);
             button.setIncludeFontPadding(false);
@@ -271,7 +305,8 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < tabButtons.size(); i++) {
             boolean isSelected = tabs[i] == selectedTab;
             TextView button = tabButtons.get(i);
-            button.setTextColor(isSelected ? APP_BLUE : Color.rgb(70, 78, 94));
+            button.setText(tabLabel(tabs[i]));
+            button.setTextColor(isSelected ? appBlue() : navTextColor());
             button.setTypeface(Typeface.DEFAULT, isSelected ? Typeface.BOLD : Typeface.NORMAL);
             button.setBackgroundColor(Color.TRANSPARENT);
         }
@@ -286,19 +321,24 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        int availableWidth = bottomNavDock.getWidth() - bottomNavDock.getPaddingLeft() - bottomNavDock.getPaddingRight();
-        int tabWidth = availableWidth / BottomTab.values().length;
-        if (tabWidth <= 0) {
+        int tabCount = BottomTab.values().length;
+        float tabWidth = bottomNavDock.getWidth() / (float) tabCount;
+        if (tabWidth <= 0f) {
             return;
         }
 
+        int tabIndex = selectedTab.ordinal();
+        int target = Math.round(tabIndex * tabWidth);
+        int indicatorWidth = tabIndex == tabCount - 1
+                ? bottomNavDock.getWidth() - target
+                : Math.round(tabWidth);
+
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) navIndicator.getLayoutParams();
-        params.width = tabWidth - dp(2);
-        params.height = dp(46);
+        params.width = indicatorWidth;
+        params.height = bottomNavDock.getHeight();
         params.leftMargin = 0;
         navIndicator.setLayoutParams(params);
 
-        float target = selectedTab.ordinal() * tabWidth + dp(1);
         if (animate) {
             navIndicator.animate()
                     .translationX(target)
@@ -326,7 +366,9 @@ public class MainActivity extends AppCompatActivity {
         updateBottomNav();
         updateSystemBars();
 
-        if (tabChanged) {
+        if (tabChanged && isHomeFilesMorph(renderedTab, selectedTab)) {
+            renderHomeFilesMorphTransition(renderedTab, selectedTab);
+        } else if (tabChanged) {
             renderCurrentTabWithTransition(slideDirection);
         } else {
             contentContainer.animate().cancel();
@@ -337,6 +379,11 @@ public class MainActivity extends AppCompatActivity {
             contentContainer.setTranslationX(0f);
         }
         renderedTab = selectedTab;
+    }
+
+    private boolean isHomeFilesMorph(@Nullable BottomTab from, BottomTab to) {
+        return (from == BottomTab.HOME && to == BottomTab.FILES)
+                || (from == BottomTab.FILES && to == BottomTab.HOME);
     }
 
     private void renderSelectedTab() {
@@ -354,6 +401,164 @@ public class MainActivity extends AppCompatActivity {
                 renderOptionsScreen();
                 break;
         }
+    }
+
+    private void renderHomeFilesMorphTransition(BottomTab from, BottomTab to) {
+        LinearLayout oldContainer = contentContainer;
+        oldContainer.animate().cancel();
+
+        LinearLayout newContainer = new LinearLayout(this);
+        newContainer.setOrientation(LinearLayout.VERTICAL);
+        newContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        newContainer.setAlpha(1f);
+        newContainer.setTranslationX(0f);
+
+        FrameLayout.LayoutParams containerParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        );
+        root.addView(newContainer, 1, containerParams);
+        root.removeView(oldContainer);
+        contentContainer = newContainer;
+
+        boolean expanding = from == BottomTab.HOME && to == BottomTab.FILES;
+        LinearLayout header = expanding ? createHeader(true) : createHeader(false, true);
+        newContainer.addView(header);
+
+        FrameLayout bodyFrame = new FrameLayout(this);
+        bodyFrame.setClipChildren(true);
+        bodyFrame.setClipToPadding(true);
+        newContainer.addView(bodyFrame, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+
+        LinearLayout oldBody = createTransitionBody();
+        LinearLayout newBody = createTransitionBody();
+        renderBodyForTab(from, oldBody);
+        renderBodyForTab(to, newBody);
+        bodyFrame.addView(oldBody, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        bodyFrame.addView(newBody, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        View shortcuts = header.getChildCount() > 1 ? header.getChildAt(1) : null;
+        int startHeight = expanding ? collapsedHeaderHeight() : expandedHeaderHeight();
+        int endHeight = expanding ? expandedHeaderHeight() : collapsedHeaderHeight();
+
+        ViewGroup.LayoutParams layoutParams = header.getLayoutParams();
+        if (layoutParams == null) {
+            layoutParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    startHeight
+            );
+        }
+        layoutParams.height = startHeight;
+        header.setLayoutParams(layoutParams);
+
+        if (shortcuts != null) {
+            shortcuts.setAlpha(expanding ? 0f : 1f);
+            shortcuts.setTranslationY(expanding ? -dp(14) : 0f);
+        }
+
+        android.view.animation.Interpolator interpolator =
+                android.view.animation.AnimationUtils.loadInterpolator(this, android.R.interpolator.fast_out_slow_in);
+
+        float width = root != null && root.getWidth() > 0 ? root.getWidth() : getResources().getDisplayMetrics().widthPixels;
+        float sign = to.ordinal() > from.ordinal() ? 1f : -1f;
+        oldBody.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        newBody.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        oldBody.setTranslationX(0f);
+        newBody.setTranslationX(width * sign);
+
+        ValueAnimator heightAnimator = ValueAnimator.ofInt(startHeight, endHeight);
+        heightAnimator.setDuration(330);
+        heightAnimator.setInterpolator(interpolator);
+        heightAnimator.addUpdateListener(animation -> {
+            ViewGroup.LayoutParams params = header.getLayoutParams();
+            params.height = (int) animation.getAnimatedValue();
+            header.setLayoutParams(params);
+        });
+        heightAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (!expanding && shortcuts != null) {
+                    header.removeView(shortcuts);
+                    header.setPadding(dp(22), getStatusBarHeight() + dp(18), dp(22), dp(28));
+                }
+
+                ViewGroup.LayoutParams params = header.getLayoutParams();
+                params.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                header.setLayoutParams(params);
+            }
+        });
+
+        oldBody.animate()
+                .translationX(-width * sign)
+                .alpha(1f)
+                .setDuration(340)
+                .setInterpolator(interpolator)
+                .setListener(null)
+                .start();
+
+        newBody.animate()
+                .translationX(0f)
+                .alpha(1f)
+                .setDuration(340)
+                .setInterpolator(interpolator)
+                .setListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        oldBody.animate().setListener(null);
+                        bodyFrame.removeView(oldBody);
+                        newBody.setLayerType(View.LAYER_TYPE_NONE, null);
+                        newBody.setTranslationX(0f);
+                        newContainer.setLayerType(View.LAYER_TYPE_NONE, null);
+                        bottomNavDock.bringToFront();
+                        cameraButton.bringToFront();
+                    }
+                })
+                .start();
+
+        if (shortcuts != null) {
+            shortcuts.animate()
+                    .alpha(expanding ? 1f : 0f)
+                    .translationY(expanding ? 0f : -dp(12))
+                    .setDuration(expanding ? 230 : 170)
+                    .setStartDelay(expanding ? 85 : 0)
+                    .setInterpolator(interpolator)
+                    .start();
+        }
+
+        heightAnimator.start();
+    }
+
+    private LinearLayout createTransitionBody() {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setBackgroundColor(pageBackground());
+        return body;
+    }
+
+    private void renderBodyForTab(BottomTab tab, LinearLayout target) {
+        if (tab == BottomTab.HOME) {
+            renderHomeBody(target);
+        } else if (tab == BottomTab.FILES) {
+            renderFilesBody(target);
+        }
+    }
+
+    private int collapsedHeaderHeight() {
+        return getStatusBarHeight() + dp(18) + dp(52) + dp(28);
+    }
+
+    private int expandedHeaderHeight() {
+        return getStatusBarHeight() + dp(18) + dp(52) + dp(20) + dp(90) + dp(22);
     }
 
     private void renderCurrentTabWithTransition(int direction) {
@@ -419,27 +624,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateSystemBars() {
-        getWindow().setNavigationBarColor(Color.WHITE);
+        getWindow().setNavigationBarColor(pageBackground());
 
         int flags = 0;
         if (selectedTab == BottomTab.HOME || selectedTab == BottomTab.FILES) {
-            getWindow().setStatusBarColor(APP_BLUE);
+            getWindow().setStatusBarColor(appBlue());
         } else {
-            getWindow().setStatusBarColor(PAGE_BACKGROUND);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            getWindow().setStatusBarColor(pageBackground());
+            if (!isDarkTheme() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (!isDarkTheme() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
     private void renderHomeScreen() {
-        contentContainer.addView(createHeader(false));
-        contentContainer.addView(createSectionTitle("Recent files", 24));
+        renderHomeScreen(false);
+    }
+
+    private void renderHomeScreen(boolean includeTemporaryShortcuts) {
+        contentContainer.addView(createHeader(false, includeTemporaryShortcuts));
+        renderHomeBody(contentContainer);
+    }
+
+    private void renderHomeBody(LinearLayout target) {
+        target.addView(createSectionTitle(tr("Recent files", "Tệp gần đây"), 24));
 
         ScrollView scrollView = new ScrollView(this);
         scrollView.setClipToPadding(false);
@@ -449,14 +662,14 @@ public class MainActivity extends AppCompatActivity {
         scrollView.addView(list);
 
         if (cachedRecentDocuments.isEmpty()) {
-            list.addView(createEmptyState("No recent files"));
+            list.addView(createEmptyState(tr("No recent files", "Chưa có tệp gần đây")));
         } else {
             for (Document document : cachedRecentDocuments) {
                 list.addView(createDocumentRow(document));
             }
         }
 
-        contentContainer.addView(scrollView, new LinearLayout.LayoutParams(
+        target.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -465,9 +678,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void renderFilesScreen() {
         contentContainer.addView(createHeader(true));
+        renderFilesBody(contentContainer);
+    }
 
+    private void renderFilesBody(LinearLayout target) {
         if (showingDownloads || openedFolder != null) {
-            contentContainer.addView(createBackRow());
+            target.addView(createBackRow());
         }
 
         List<ExplorerItem> explorerItems = buildExplorerItems();
@@ -479,7 +695,7 @@ public class MainActivity extends AppCompatActivity {
         scrollView.addView(list);
 
         if (explorerItems.isEmpty()) {
-            list.addView(createEmptyState("Your storage is empty"));
+            list.addView(createEmptyState(tr("Your storage is empty", "Kho lưu trữ đang trống")));
         } else {
             for (int i = 0; i < explorerItems.size(); i += 2) {
                 LinearLayout row = new LinearLayout(this);
@@ -515,7 +731,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        contentContainer.addView(scrollView, new LinearLayout.LayoutParams(
+        target.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -527,22 +743,25 @@ public class MainActivity extends AppCompatActivity {
         container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(dp(18), getStatusBarHeight() + dp(18), dp(18), getNavigationBarHeight() + dp(150));
 
-        TextView title = createSectionTitle("Magic Tools", 28);
+        TextView title = createSectionTitle(tr("Magic Tools", "Công cụ thông minh"), 28);
         title.setPadding(dp(2), dp(8), dp(2), dp(16));
         container.addView(title);
 
         LinearLayout rowOne = new LinearLayout(this);
         rowOne.setOrientation(LinearLayout.HORIZONTAL);
-        rowOne.addView(createToolCard("PDF Converter", "Merge scans into one PDF", Color.rgb(229, 115, 115),
+        rowOne.addView(createToolCard(tr("PDF Converter", "Chuyển PDF"), tr("Merge scans into one PDF", "Gộp bản quét thành một PDF"), Color.rgb(229, 115, 115),
+                R.drawable.ic_magic_pdf,
                 v -> showPdfImagePicker()), weightedCardParams(true));
-        rowOne.addView(createToolCard("Text Extract", "Convert images to editable text", APP_BLUE,
+        rowOne.addView(createToolCard(tr("Text Extract", "Trích xuất chữ"), tr("Convert images to editable text", "Chuyển ảnh thành văn bản"), appBlue(),
+                R.drawable.ic_magic_ocr,
                 v -> showOcrImagePicker()), weightedCardParams(false));
         container.addView(rowOne);
 
         LinearLayout rowTwo = new LinearLayout(this);
         rowTwo.setOrientation(LinearLayout.HORIZONTAL);
         rowTwo.addView(new Space(this), new LinearLayout.LayoutParams(0, 1, 0.5f));
-        rowTwo.addView(createToolCard("Text Summarizer", "Summarize long text with backend API", Color.rgb(61, 186, 124),
+        rowTwo.addView(createToolCard(tr("Text Summarizer", "Tóm tắt văn bản"), tr("Summarize long text with backend API", "Tóm tắt văn bản dài bằng API"), Color.rgb(61, 186, 124),
+                R.drawable.ic_magic_summary,
                 v -> startActivity(new Intent(this, TextSummarizerActivity.class))), new LinearLayout.LayoutParams(0, dp(180), 1f));
         rowTwo.addView(new Space(this), new LinearLayout.LayoutParams(0, 1, 0.5f));
         LinearLayout.LayoutParams rowTwoParams = new LinearLayout.LayoutParams(
@@ -559,41 +778,207 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void renderOptionsScreen() {
-        FrameLayout frame = new FrameLayout(this);
-        frame.setPadding(0, getStatusBarHeight(), 0, getNavigationBarHeight() + dp(120));
-        TextView text = new TextView(this);
-        text.setText("Options");
-        text.setTextColor(TEXT_DARK);
-        text.setTextSize(28);
-        text.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        frame.addView(text, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setClipToPadding(false);
+        scrollView.setBackgroundColor(pageBackground());
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(18), getStatusBarHeight() + dp(18), dp(18), getNavigationBarHeight() + dp(150));
+        scrollView.addView(container, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-        contentContainer.addView(frame, new LinearLayout.LayoutParams(
+
+        TextView title = createSectionTitle(tr("Options", "Tùy chọn"), 28);
+        title.setPadding(dp(2), dp(8), dp(2), dp(16));
+        container.addView(title);
+
+        container.addView(createOptionRow(
+                tr("Theme", "Giao diện"),
+                currentThemeLabel(),
+                tr("Choose the app appearance.", "Chọn giao diện của ứng dụng."),
+                v -> showThemeDialog()
+        ));
+        container.addView(createOptionRow(
+                tr("Language", "Ngôn ngữ"),
+                currentLanguageLabel(),
+                tr("Choose English or Vietnamese text.", "Chọn hiển thị tiếng Anh hoặc tiếng Việt."),
+                v -> showLanguageDialog()
+        ));
+        container.addView(createOptionRow(
+                tr("Permissions", "Quyền ứng dụng"),
+                permissionSummary(),
+                tr("Camera, storage, and notifications used by SmartScanner.", "Máy ảnh, bộ nhớ và thông báo mà SmartScanner sử dụng."),
+                v -> showPermissionsDialog()
+        ));
+
+        contentContainer.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
     }
 
+    private View createOptionRow(String title, String value, String description, View.OnClickListener listener) {
+        MaterialCardView card = new MaterialCardView(this);
+        card.setRadius(dp(12));
+        card.setCardElevation(0);
+        card.setStrokeWidth(dp(1));
+        card.setStrokeColor(cardStroke());
+        card.setCardBackgroundColor(cardBackground());
+        card.setOnClickListener(listener);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(18), dp(16), dp(14), dp(16));
+
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextColor(textPrimary());
+        titleView.setTextSize(16);
+        titleView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        textColumn.addView(titleView);
+
+        TextView descView = new TextView(this);
+        descView.setText(description);
+        descView.setTextColor(textMuted());
+        descView.setTextSize(13);
+        descView.setMaxLines(2);
+        descView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        descParams.setMargins(0, dp(4), 0, 0);
+        textColumn.addView(descView, descParams);
+
+        row.addView(textColumn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView valueView = new TextView(this);
+        valueView.setText(value);
+        valueView.setTextColor(appBlue());
+        valueView.setTextSize(13);
+        valueView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        valueView.setGravity(Gravity.CENTER);
+        valueView.setSingleLine(true);
+        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        valueView.setPadding(dp(12), dp(7), dp(12), dp(7));
+        valueView.setBackground(createRoundedBackground(optionValueBackground(), dp(16)));
+        LinearLayout.LayoutParams valueParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        valueParams.setMargins(dp(12), 0, 0, 0);
+        row.addView(valueView, valueParams);
+
+        TextView chevron = new TextView(this);
+        chevron.setText(">");
+        chevron.setTextColor(textMuted());
+        chevron.setTextSize(22);
+        chevron.setGravity(Gravity.CENTER);
+        row.addView(chevron, new LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        card.addView(row);
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        cardParams.setMargins(0, 0, 0, dp(12));
+        card.setLayoutParams(cardParams);
+        return card;
+    }
+
+    private void showThemeDialog() {
+        String[] themes = {tr("Light", "Sáng"), tr("Dark", "Tối")};
+        int selected = isDarkTheme() ? 1 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Theme", "Giao diện"))
+                .setSingleChoiceItems(themes, selected, (dialog, which) -> {
+                    dialog.dismiss();
+                    setThemePreference(which == 0 ? THEME_LIGHT : THEME_DARK);
+                })
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
+                .show();
+    }
+
+    private void showLanguageDialog() {
+        String[] languages = {"English", "Tiếng Việt"};
+        int selected = isVietnamese() ? 1 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Language", "Ngôn ngữ"))
+                .setSingleChoiceItems(languages, selected, (dialog, which) -> {
+                    dialog.dismiss();
+                    setLanguagePreference(which == 0 ? LANGUAGE_EN : LANGUAGE_VI);
+                })
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
+                .show();
+    }
+
+    private void showPermissionsDialog() {
+        String message = tr(
+                "Permissions are Android approvals that let SmartScanner use device features. Camera is used for scanning, storage is used for importing/exporting files, and notifications may be used for background processing status.",
+                "Quyền ứng dụng là các phê duyệt của Android để SmartScanner dùng tính năng trên máy. Camera dùng để quét, bộ nhớ dùng để nhập/xuất tệp, và thông báo có thể dùng để hiển thị trạng thái xử lý nền."
+        );
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Permissions", "Quyền ứng dụng"))
+                .setMessage(message + "\n\n" + permissionDetails())
+                .setPositiveButton(tr("Open App Settings", "Mở cài đặt app"), (dialog, which) -> openAppPermissionSettings())
+                .setNeutralButton(tr("Storage Access", "Quyền bộ nhớ"), (dialog, which) -> openStoragePermissionSettings())
+                .setNegativeButton(tr("Close", "Đóng"), null)
+                .show();
+    }
+
+    private void setThemePreference(String theme) {
+        if (Objects.equals(selectedTheme, theme)) {
+            return;
+        }
+        selectedTheme = theme;
+        optionsPrefs.edit().putString(PREF_THEME, theme).apply();
+        AppCompatDelegate.setDefaultNightMode(
+                isDarkTheme() ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO
+        );
+        recreate();
+    }
+
+    private void setLanguagePreference(String language) {
+        if (Objects.equals(selectedLanguage, language)) {
+            return;
+        }
+        selectedLanguage = language;
+        optionsPrefs.edit().putString(PREF_LANGUAGE, language).apply();
+        if (searchPopup != null) {
+            searchPopup.dismiss();
+        }
+        renderCurrentTab();
+    }
+
     private LinearLayout createHeader(boolean showShortcuts) {
+        return createHeader(showShortcuts, false);
+    }
+
+    private LinearLayout createHeader(boolean showShortcuts, boolean forceShortcutRow) {
+        boolean hasShortcutRow = showShortcuts || forceShortcutRow;
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
         header.setGravity(Gravity.CENTER_HORIZONTAL);
-        header.setPadding(dp(22), getStatusBarHeight() + dp(18), dp(22), showShortcuts ? dp(22) : dp(28));
-        header.setBackgroundColor(APP_BLUE);
+        header.setPadding(dp(22), getStatusBarHeight() + dp(18), dp(22), hasShortcutRow ? dp(22) : dp(28));
+        header.setBackgroundColor(appBlue());
 
         EditText searchBox = new EditText(this);
         searchAnchor = searchBox;
         searchBox.setSingleLine(true);
-        searchBox.setHint("Search for any file!");
-        searchBox.setHintTextColor(Color.rgb(132, 139, 151));
-        searchBox.setTextColor(TEXT_DARK);
+        searchBox.setHint(tr("Search for any file!", "Tìm kiếm tệp bất kỳ!"));
+        searchBox.setHintTextColor(textMuted());
+        searchBox.setTextColor(textPrimary());
         searchBox.setTextSize(16);
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         searchBox.setPadding(dp(20), 0, dp(20), 0);
-        searchBox.setBackground(createRoundedBackground(Color.rgb(250, 251, 253), dp(28)));
+        searchBox.setBackground(createRoundedBackground(inputBackground(), dp(28)));
         searchBox.setText(viewModel.getSearchQueryValue());
         searchBox.setSelection(searchBox.getText().length());
         header.addView(searchBox, new LinearLayout.LayoutParams(
@@ -617,7 +1002,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        if (showShortcuts) {
+        if (hasShortcutRow) {
             LinearLayout shortcuts = new LinearLayout(this);
             shortcuts.setOrientation(LinearLayout.HORIZONTAL);
             shortcuts.setGravity(Gravity.CENTER);
@@ -628,13 +1013,17 @@ public class MainActivity extends AppCompatActivity {
             shortcutRowParams.setMargins(0, dp(20), 0, 0);
 
             if (selectedItems.isEmpty()) {
-                shortcuts.addView(createShortcutButton("Upload file", v -> filePickerLauncher.launch("*/*")), shortcutParams(true));
-                shortcuts.addView(createShortcutButton("Upload image", v -> imagePickerLauncher.launch("image/*")), shortcutParams(false));
-                shortcuts.addView(createShortcutButton("Create folder", v -> viewModel.createFolder("New Folder", currentFolderId())), shortcutParams(false));
+                shortcuts.addView(createShortcutButton(tr("Upload file", "Tải tệp"), R.drawable.ic_upload_file_shortcut, v -> filePickerLauncher.launch("*/*")), shortcutParams(true));
+                shortcuts.addView(createShortcutButton(tr("Upload image", "Tải ảnh"), R.drawable.ic_upload_image_shortcut, v -> imagePickerLauncher.launch("image/*")), shortcutParams(false));
+                shortcuts.addView(createShortcutButton(tr("Create folder", "Tạo thư mục"), R.drawable.ic_create_file_shortcut, v -> viewModel.createFolder(tr("New Folder", "Thư mục mới"), currentFolderId())), shortcutParams(false));
             } else {
-                shortcuts.addView(createShortcutButton("Delete", v -> deleteSelectedItems()), shortcutParams(true));
-                shortcuts.addView(createShortcutButton("Share", v -> shareSelectedItems()), shortcutParams(false));
-                shortcuts.addView(createShortcutButton("To Folder", v -> moveSelectedToNewFolder()), shortcutParams(false));
+                shortcuts.addView(createShortcutButton(tr("Delete", "Xóa"), R.drawable.ic_delete_shortcut, v -> deleteSelectedItems()), shortcutParams(true));
+                if (hasSelectedFolder()) {
+                    shortcuts.addView(createShortcutButton(tr("Unfold", "Mở bung"), R.drawable.ic_unfold_shortcut, v -> unfoldSelectedFolders()), shortcutParams(false));
+                } else {
+                    shortcuts.addView(createShortcutButton(tr("Share", "Chia sẻ"), R.drawable.ic_share_shortcut, v -> shareSelectedItems()), shortcutParams(false));
+                }
+                shortcuts.addView(createShortcutButton(tr("To Folder", "Vào thư mục"), R.drawable.ic_move_folder_shortcut, v -> moveSelectedToNewFolder()), shortcutParams(false));
             }
 
             header.addView(shortcuts, shortcutRowParams);
@@ -652,16 +1041,16 @@ public class MainActivity extends AppCompatActivity {
         TextView back = new TextView(this);
         back.setText("<");
         back.setTextSize(28);
-        back.setTextColor(TEXT_DARK);
+        back.setTextColor(textPrimary());
         back.setGravity(Gravity.CENTER);
         back.setOnClickListener(v -> navigateUp());
         row.addView(back, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
         TextView title = new TextView(this);
-        title.setText(showingDownloads ? "Downloads" : openedFolder != null ? openedFolder.name : "Folder");
+        title.setText(showingDownloads ? tr("Downloads", "Tải xuống") : openedFolder != null ? openedFolder.name : tr("Folder", "Thư mục"));
         title.setTextSize(20);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setTextColor(TEXT_DARK);
+        title.setTextColor(textPrimary());
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -672,7 +1061,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView createSectionTitle(String title, int sizeSp) {
         TextView textView = new TextView(this);
         textView.setText(title);
-        textView.setTextColor(TEXT_DARK);
+        textView.setTextColor(textPrimary());
         textView.setTextSize(sizeSp);
         textView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         textView.setPadding(dp(22), dp(14), dp(22), dp(8));
@@ -682,7 +1071,7 @@ public class MainActivity extends AppCompatActivity {
     private View createEmptyState(String message) {
         TextView empty = new TextView(this);
         empty.setText(message);
-        empty.setTextColor(Color.GRAY);
+        empty.setTextColor(emptyTextColor());
         empty.setTextSize(16);
         empty.setGravity(Gravity.CENTER);
         empty.setPadding(0, dp(80), 0, dp(80));
@@ -710,11 +1099,12 @@ public class MainActivity extends AppCompatActivity {
         row.setMinimumHeight(dp(86));
         row.setPadding(dp(10), dp(8), dp(10), dp(8));
 
-        card.setOnClickListener(v -> openFile(document.filePath, document.fileType));
-        card.setOnLongClickListener(v -> {
-            showItemActions(document);
-            return true;
-        });
+        attachItemGestures(
+                card,
+                () -> openFile(document.filePath, document.fileType),
+                () -> selectItem(document),
+                () -> showRenameDialog(document)
+        );
 
         row.addView(createFileIcon(mapFileType(document.fileType), document.filePath, dp(66), dp(76)));
 
@@ -724,7 +1114,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(document.title);
-        title.setTextColor(TEXT_DARK);
+        title.setTextColor(textPrimary());
         title.setTextSize(16);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setSingleLine(true);
@@ -734,7 +1124,7 @@ public class MainActivity extends AppCompatActivity {
         TextView date = new TextView(this);
         date.setText(dateFormat.format(new Date(document.createdAt)));
         date.setTextSize(12);
-        date.setTextColor(TEXT_MUTED);
+        date.setTextColor(textMuted());
         textColumn.addView(date);
 
         row.addView(textColumn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -749,7 +1139,7 @@ public class MainActivity extends AppCompatActivity {
         card.setUseCompatPadding(false);
         card.setCardBackgroundColor(Color.TRANSPARENT);
         card.setStrokeWidth(isSelected(item.originalItem) ? dp(2) : 0);
-        card.setStrokeColor(isSelected(item.originalItem) ? APP_BLUE : Color.TRANSPARENT);
+        card.setStrokeColor(isSelected(item.originalItem) ? appBlue() : Color.TRANSPARENT);
         card.setMinimumHeight(dp(166));
 
         LinearLayout content = new LinearLayout(this);
@@ -761,7 +1151,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(item.title);
-        title.setTextColor(TEXT_DARK);
+        title.setTextColor(textPrimary());
         title.setTextSize(14);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
@@ -777,7 +1167,7 @@ public class MainActivity extends AppCompatActivity {
         TextView date = new TextView(this);
         date.setText(item.date);
         date.setTextSize(11);
-        date.setTextColor(TEXT_MUTED);
+        date.setTextColor(textMuted());
         date.setGravity(Gravity.CENTER);
         date.setSingleLine(true);
         date.setEllipsize(TextUtils.TruncateAt.END);
@@ -787,45 +1177,62 @@ public class MainActivity extends AppCompatActivity {
         ));
 
         card.addView(content);
-        card.setOnClickListener(v -> handleExplorerClick(item));
-        card.setOnLongClickListener(v -> {
-            if (!item.isVirtualDownloads()) {
-                showItemActions(item.originalItem);
-            }
-            return true;
-        });
+        if (item.isVirtualDownloads()) {
+            card.setOnClickListener(v -> handleExplorerClick(item));
+        } else {
+            attachItemGestures(
+                    card,
+                    () -> handleExplorerClick(item),
+                    () -> selectItem(item.originalItem),
+                    () -> showRenameDialog(item.originalItem)
+            );
+        }
         return card;
     }
 
     private MaterialButton createShortcutButton(String label, View.OnClickListener listener) {
+        return createShortcutButton(label, 0, listener);
+    }
+
+    private MaterialButton createShortcutButton(String label, int iconRes, View.OnClickListener listener) {
         MaterialButton button = new MaterialButton(this);
-        button.setText(label.replace(" ", "\n"));
+        button.setText(label);
         button.setAllCaps(false);
-        button.setTextColor(APP_BLUE);
-        button.setTextSize(13);
+        button.setTextColor(appBlue());
+        button.setTextSize(14);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setGravity(Gravity.CENTER);
+        button.setMaxLines(1);
+        button.setSingleLine(true);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setMinHeight(0);
         button.setMinWidth(0);
         button.setInsetTop(0);
         button.setInsetBottom(0);
-        button.setPadding(dp(8), 0, dp(8), 0);
-        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.WHITE));
+        button.setPadding(dp(6), dp(10), dp(6), dp(8));
+        button.setBackgroundTintList(ColorStateList.valueOf(shortcutBackground()));
         button.setStrokeWidth(dp(1));
         button.setStrokeColor(android.content.res.ColorStateList.valueOf(Color.argb(45, 255, 255, 255)));
         button.setCornerRadius(dp(20));
         button.setElevation(dp(1));
+        if (iconRes != 0) {
+            button.setIconResource(iconRes);
+            button.setIconTint(ColorStateList.valueOf(appBlue()));
+            button.setIconGravity(MaterialButton.ICON_GRAVITY_TOP);
+            button.setIconSize(dp(46));
+            button.setIconPadding(dp(4));
+        }
         button.setOnClickListener(listener);
         return button;
     }
 
-    private View createToolCard(String title, String description, int color, View.OnClickListener listener) {
+    private View createToolCard(String title, String description, int color, int iconRes, View.OnClickListener listener) {
         MaterialCardView card = new MaterialCardView(this);
         card.setRadius(dp(14));
         card.setCardElevation(dp(2));
         card.setStrokeWidth(dp(1));
-        card.setStrokeColor(CARD_STROKE);
-        card.setCardBackgroundColor(Color.WHITE);
+        card.setStrokeColor(cardStroke());
+        card.setCardBackgroundColor(cardBackground());
         card.setMinimumHeight(dp(180));
         card.setOnClickListener(listener);
 
@@ -834,12 +1241,14 @@ public class MainActivity extends AppCompatActivity {
         content.setGravity(Gravity.CENTER);
         content.setPadding(dp(14), dp(14), dp(14), dp(14));
 
-        ExplorerType toolType = title.startsWith("PDF") ? ExplorerType.PDF : ExplorerType.DOC;
-        content.addView(new FileGlyphView(this, toolType), new LinearLayout.LayoutParams(dp(72), dp(82)));
+        ImageView iconView = new ImageView(this);
+        iconView.setImageResource(iconRes);
+        iconView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        content.addView(iconView, new LinearLayout.LayoutParams(dp(76), dp(76)));
 
         TextView titleView = new TextView(this);
         titleView.setText(title);
-        titleView.setTextColor(TEXT_DARK);
+        titleView.setTextColor(textPrimary());
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         titleView.setGravity(Gravity.CENTER);
@@ -854,7 +1263,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView descView = new TextView(this);
         descView.setText(description);
-        descView.setTextColor(TEXT_MUTED);
+        descView.setTextColor(textMuted());
         descView.setTextSize(12);
         descView.setGravity(Gravity.CENTER);
         descView.setMaxLines(2);
@@ -872,8 +1281,8 @@ public class MainActivity extends AppCompatActivity {
             thumbnailCard.setCardElevation(0);
             thumbnailCard.setUseCompatPadding(false);
             thumbnailCard.setStrokeWidth(dp(1));
-            thumbnailCard.setStrokeColor(CARD_STROKE);
-            thumbnailCard.setCardBackgroundColor(Color.WHITE);
+            thumbnailCard.setStrokeColor(cardStroke());
+            thumbnailCard.setCardBackgroundColor(cardBackground());
             thumbnailCard.setLayoutParams(new LinearLayout.LayoutParams(width, height));
 
             ImageView imageView = new ImageView(this);
@@ -918,7 +1327,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         } else {
-            items.add(new ExplorerItem("Downloads", cachedDownloadFiles.size() + " files synced",
+            items.add(new ExplorerItem(tr("Downloads", "Tải xuống"), cachedDownloadFiles.size() + tr(" files synced", " tệp đã đồng bộ"),
                     ExplorerType.FOLDER, ExplorerItem.VIRTUAL_DOWNLOADS, null));
             for (Folder folder : cachedFolders) {
                 if (folder.parentFolderId == null) {
@@ -980,7 +1389,7 @@ public class MainActivity extends AppCompatActivity {
         DocumentRepository.DATABASE_EXECUTOR.execute(() -> {
             String filePath = FileStorageManager.saveFileFromUri(this, uri);
             if (filePath == null) {
-                runOnUiThread(() -> Toast.makeText(this, "Import failed", Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> Toast.makeText(this, tr("Import failed", "Nhập tệp thất bại"), Toast.LENGTH_SHORT).show());
                 return;
             }
 
@@ -995,7 +1404,7 @@ public class MainActivity extends AppCompatActivity {
                     : null;
 
             viewModel.insertDocument(folderId, fileName, filePath, mimeType);
-            runOnUiThread(() -> Toast.makeText(this, "Imported: " + fileName, Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, tr("Imported: ", "Đã nhập: ") + fileName, Toast.LENGTH_SHORT).show());
         });
     }
 
@@ -1003,7 +1412,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             File file = new File(filePath);
             if (!file.exists()) {
-                Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, tr("File not found", "Không tìm thấy tệp"), Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -1020,14 +1429,60 @@ public class MainActivity extends AppCompatActivity {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } catch (Exception e) {
-            Toast.makeText(this, "No app found to open this file", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("No app found to open this file", "Không có ứng dụng để mở tệp này"), Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void attachItemGestures(View view, Runnable onClick, Runnable onLongPress, Runnable onDoubleTap) {
+        GestureDetector detector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                onClick.run();
+                return true;
+            }
+
+            @Override
+            public void onLongPress(MotionEvent e) {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                onLongPress.run();
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                onDoubleTap.run();
+                return true;
+            }
+
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+        });
+
+        view.setClickable(true);
+        view.setLongClickable(true);
+        view.setOnTouchListener((v, event) -> detector.onTouchEvent(event));
+    }
+
+    private void selectItem(Object item) {
+        if (item == null || ExplorerItem.VIRTUAL_DOWNLOADS.equals(item)) {
+            return;
+        }
+        selectedItems.clear();
+        selectedItems.add(item);
+        renderCurrentTab();
     }
 
     private void showItemActions(Object item) {
         if (item instanceof Document) {
             Document document = (Document) item;
-            String[] actions = {"Open", "Select", "Rename", "Delete", "Share"};
+            String[] actions = {
+                    tr("Open", "Mở"),
+                    tr("Select", "Chọn"),
+                    tr("Rename", "Đổi tên"),
+                    tr("Delete", "Xóa"),
+                    tr("Share", "Chia sẻ")
+            };
             new AlertDialog.Builder(this)
                     .setTitle(document.title)
                     .setItems(actions, (dialog, which) -> {
@@ -1047,7 +1502,12 @@ public class MainActivity extends AppCompatActivity {
                     .show();
         } else if (item instanceof Folder) {
             Folder folder = (Folder) item;
-            String[] actions = {"Open", "Select", "Rename", "Delete"};
+            String[] actions = {
+                    tr("Open", "Mở"),
+                    tr("Select", "Chọn"),
+                    tr("Rename", "Đổi tên"),
+                    tr("Delete", "Xóa")
+            };
             new AlertDialog.Builder(this)
                     .setTitle(folder.name)
                     .setItems(actions, (dialog, which) -> {
@@ -1090,9 +1550,9 @@ public class MainActivity extends AppCompatActivity {
 
         String finalExtension = extension;
         new AlertDialog.Builder(this)
-                .setTitle("Rename")
+                .setTitle(tr("Rename", "Đổi tên"))
                 .setView(input)
-                .setPositiveButton("Save", (dialog, which) -> {
+                .setPositiveButton(tr("Save", "Lưu"), (dialog, which) -> {
                     String value = input.getText().toString().trim();
                     if (value.isEmpty()) {
                         return;
@@ -1103,7 +1563,7 @@ public class MainActivity extends AppCompatActivity {
                         viewModel.renameFolder((Folder) item, value);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
                 .show();
     }
 
@@ -1144,7 +1604,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void shareDocuments(List<Document> documents) {
         if (documents.isEmpty()) {
-            Toast.makeText(this, "No files selected", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("No files selected", "Chưa chọn tệp nào"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1161,7 +1621,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (uris.isEmpty()) {
-            Toast.makeText(this, "Files not found", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("Files not found", "Không tìm thấy tệp"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1169,26 +1629,55 @@ public class MainActivity extends AppCompatActivity {
         intent.setType("*/*");
         intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(intent, "Share files"));
+        startActivity(Intent.createChooser(intent, tr("Share files", "Chia sẻ tệp")));
+    }
+
+    private boolean hasSelectedFolder() {
+        for (Object item : selectedItems) {
+            if (item instanceof Folder) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void unfoldSelectedFolders() {
+        List<Folder> folders = new ArrayList<>();
+        for (Object item : selectedItems) {
+            if (item instanceof Folder) {
+                folders.add((Folder) item);
+            }
+        }
+        if (folders.isEmpty()) {
+            Toast.makeText(this, tr("No folders selected", "Chưa chọn thư mục nào"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        viewModel.unfoldFolders(folders);
+        Toast.makeText(this, tr("Unfolded ", "Đã mở bung ") + folders.size() + tr(" folders", " thư mục"), Toast.LENGTH_SHORT).show();
+        selectedItems.clear();
+        renderCurrentTab();
     }
 
     private void moveSelectedToNewFolder() {
-        List<Document> documents = new ArrayList<>();
+        List<Object> items = new ArrayList<>();
         for (Object item : selectedItems) {
             if (item instanceof Document) {
                 Document document = (Document) item;
                 if (!Objects.equals(document.folderId, -1)) {
-                    documents.add(document);
+                    items.add(document);
                 }
+            } else if (item instanceof Folder) {
+                items.add(item);
             }
         }
-        if (documents.isEmpty()) {
-            Toast.makeText(this, "No app files selected", Toast.LENGTH_SHORT).show();
+        if (items.isEmpty()) {
+            Toast.makeText(this, tr("No app files selected", "Chưa chọn tệp trong app"), Toast.LENGTH_SHORT).show();
             return;
         }
 
-        viewModel.createFolderAndMoveDocuments("New Grouped Folder", documents, currentFolderId());
-        Toast.makeText(this, "Moved " + documents.size() + " files", Toast.LENGTH_SHORT).show();
+        viewModel.createFolderAndMoveItems(tr("New Grouped Folder", "Thư mục nhóm mới"), items, currentFolderId());
+        Toast.makeText(this, tr("Moved ", "Đã chuyển ") + items.size() + tr(" items", " mục"), Toast.LENGTH_SHORT).show();
         selectedItems.clear();
         renderCurrentTab();
     }
@@ -1196,7 +1685,7 @@ public class MainActivity extends AppCompatActivity {
     private void showPdfImagePicker() {
         List<Document> imageDocuments = getImageDocuments();
         if (imageDocuments.isEmpty()) {
-            Toast.makeText(this, "No images found in app", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("No images found in app", "Không tìm thấy ảnh trong app"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1208,7 +1697,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Select Images for PDF")
+                .setTitle(tr("Select Images for PDF", "Chọn ảnh để tạo PDF"))
                 .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> {
                     Document document = imageDocuments.get(which);
                     if (isChecked) {
@@ -1217,14 +1706,14 @@ public class MainActivity extends AppCompatActivity {
                         selected.remove(document);
                     }
                 })
-                .setPositiveButton("Next", (dialog, which) -> {
+                .setPositiveButton(tr("Next", "Tiếp"), (dialog, which) -> {
                     if (selected.isEmpty()) {
-                        Toast.makeText(this, "Select at least one image", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, tr("Select at least one image", "Chọn ít nhất một ảnh"), Toast.LENGTH_SHORT).show();
                     } else {
                         showPdfNameDialog(selected);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
                 .show();
     }
 
@@ -1235,16 +1724,16 @@ public class MainActivity extends AppCompatActivity {
         input.setSelection(input.getText().length());
 
         new AlertDialog.Builder(this)
-                .setTitle("Export to PDF")
+                .setTitle(tr("Export to PDF", "Xuất thành PDF"))
                 .setView(input)
-                .setPositiveButton("Convert", (dialog, which) -> {
+                .setPositiveButton(tr("Convert", "Chuyển đổi"), (dialog, which) -> {
                     String name = input.getText().toString().trim();
                     if (name.isEmpty()) {
                         name = "Converted_Scan";
                     }
                     convertImagesToPdf(selectedDocuments, name);
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
                 .show();
     }
 
@@ -1259,9 +1748,9 @@ public class MainActivity extends AppCompatActivity {
             if (path != null) {
                 File file = new File(path);
                 viewModel.insertDocument(null, file.getName(), path, "application/pdf");
-                runOnUiThread(() -> Toast.makeText(this, "PDF Created: " + file.getName(), Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> Toast.makeText(this, tr("PDF Created: ", "Đã tạo PDF: ") + file.getName(), Toast.LENGTH_SHORT).show());
             } else {
-                runOnUiThread(() -> Toast.makeText(this, "Failed to create PDF", Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> Toast.makeText(this, tr("Failed to create PDF", "Tạo PDF thất bại"), Toast.LENGTH_SHORT).show());
             }
         });
     }
@@ -1269,7 +1758,7 @@ public class MainActivity extends AppCompatActivity {
     private void showOcrImagePicker() {
         List<Document> imageDocuments = getImageDocuments();
         if (imageDocuments.isEmpty()) {
-            Toast.makeText(this, "No images found in app", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("No images found in app", "Không tìm thấy ảnh trong app"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1279,9 +1768,9 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Select Image for OCR")
+                .setTitle(tr("Select Image for OCR", "Chọn ảnh để OCR"))
                 .setItems(labels, (dialog, which) -> processImageOcr(imageDocuments.get(which)))
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
                 .show();
     }
 
@@ -1293,14 +1782,14 @@ public class MainActivity extends AppCompatActivity {
                     .addOnSuccessListener(visionText -> {
                         String text = visionText.getText();
                         if (text == null || text.trim().isEmpty()) {
-                            Toast.makeText(this, "No text found in image", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, tr("No text found in image", "Không tìm thấy chữ trong ảnh"), Toast.LENGTH_SHORT).show();
                         } else {
                             showOcrResult(text);
                         }
                     })
-                    .addOnFailureListener(e -> Toast.makeText(this, "OCR Error: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                    .addOnFailureListener(e -> Toast.makeText(this, tr("OCR Error: ", "Lỗi OCR: ") + e.getMessage(), Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("Failed to load image", "Tải ảnh thất bại"), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1318,16 +1807,16 @@ public class MainActivity extends AppCompatActivity {
         ));
 
         new AlertDialog.Builder(this)
-                .setTitle("Extracted Text")
+                .setTitle(tr("Extracted Text", "Văn bản trích xuất"))
                 .setView(scrollView)
-                .setPositiveButton("Copy", (dialog, which) -> {
+                .setPositiveButton(tr("Copy", "Sao chép"), (dialog, which) -> {
                     ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                     if (clipboard != null) {
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Extracted Text", text));
+                        clipboard.setPrimaryClip(ClipData.newPlainText(tr("Extracted Text", "Văn bản trích xuất"), text));
                     }
-                    Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, tr("Copied to clipboard", "Đã sao chép vào clipboard"), Toast.LENGTH_SHORT).show();
                 })
-                .setNegativeButton("Close", null)
+                .setNegativeButton(tr("Close", "Đóng"), null)
                 .show();
     }
 
@@ -1358,15 +1847,16 @@ public class MainActivity extends AppCompatActivity {
             searchPopupContent = new LinearLayout(this);
             searchPopupContent.setOrientation(LinearLayout.VERTICAL);
             searchPopupContent.setPadding(dp(8), dp(8), dp(8), dp(8));
-            searchPopupContent.setBackgroundColor(Color.WHITE);
+            searchPopupContent.setBackgroundColor(cardBackground());
         }
         searchPopupContent.removeAllViews();
 
         if (cachedSearchResults.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("No files found");
-            empty.setTextColor(Color.GRAY);
+            empty.setText(tr("No files found", "Không tìm thấy tệp"));
+            empty.setTextColor(emptyTextColor());
             empty.setGravity(Gravity.CENTER);
+            empty.setMinHeight(dp(68));
             empty.setPadding(dp(16), dp(16), dp(16), dp(16));
             searchPopupContent.addView(empty);
         } else {
@@ -1384,21 +1874,35 @@ public class MainActivity extends AppCompatActivity {
 
         if (searchPopup == null) {
             ScrollView scrollView = new ScrollView(this);
+            scrollView.setClipToPadding(false);
             scrollView.addView(searchPopupContent);
             searchPopup = new PopupWindow(
                     scrollView,
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(360),
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
                     false
             );
-            searchPopup.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+            searchPopup.setBackgroundDrawable(new ColorDrawable(cardBackground()));
             searchPopup.setOutsideTouchable(true);
             searchPopup.setElevation(dp(8));
         }
 
+        int maxHeight = dp(360);
+        int desiredHeight;
+        if (cachedSearchResults.isEmpty()) {
+            desiredHeight = dp(92);
+        } else {
+            int visibleCount = Math.min(8, cachedSearchResults.size());
+            desiredHeight = dp(16) + visibleCount * dp(96);
+        }
+        searchPopup.setHeight(Math.min(maxHeight, desiredHeight));
+
         if (!searchPopup.isShowing() && searchAnchor.getWindowToken() != null) {
             searchPopup.setWidth(root.getWidth() - dp(44));
             searchPopup.showAsDropDown(searchAnchor, 0, dp(8));
+        } else if (searchPopup.isShowing()) {
+            searchPopup.setWidth(root.getWidth() - dp(44));
+            searchPopup.update(searchPopup.getWidth(), Math.min(maxHeight, desiredHeight));
         }
     }
 
@@ -1418,6 +1922,156 @@ public class MainActivity extends AppCompatActivity {
     @Nullable
     private Integer currentFolderId() {
         return showingDownloads || openedFolder == null ? null : openedFolder.id;
+    }
+
+    private boolean isDarkTheme() {
+        return THEME_DARK.equals(selectedTheme);
+    }
+
+    private boolean isVietnamese() {
+        return LANGUAGE_VI.equals(selectedLanguage);
+    }
+
+    private String tr(String english, String vietnamese) {
+        return isVietnamese() ? vietnamese : english;
+    }
+
+    private String tabLabel(BottomTab tab) {
+        switch (tab) {
+            case HOME:
+                return tr("Home", "Trang chủ");
+            case FILES:
+                return tr("Files", "Tệp");
+            case TOOLS:
+                return tr("Tools", "Công cụ");
+            case OPTIONS:
+                return tr("Options", "Tùy chọn");
+            default:
+                return "";
+        }
+    }
+
+    private String currentThemeLabel() {
+        return isDarkTheme() ? tr("Dark", "Tối") : tr("Light", "Sáng");
+    }
+
+    private String currentLanguageLabel() {
+        return isVietnamese() ? "Tiếng Việt" : "English";
+    }
+
+    private int appBlue() {
+        return isDarkTheme() ? Color.rgb(93, 142, 255) : APP_BLUE;
+    }
+
+    private int pageBackground() {
+        return isDarkTheme() ? Color.rgb(18, 20, 26) : PAGE_BACKGROUND;
+    }
+
+    private int cardBackground() {
+        return isDarkTheme() ? Color.rgb(31, 34, 43) : CARD_BACKGROUND;
+    }
+
+    private int inputBackground() {
+        return isDarkTheme() ? Color.rgb(31, 34, 43) : Color.rgb(250, 251, 253);
+    }
+
+    private int shortcutBackground() {
+        return isDarkTheme() ? Color.rgb(246, 248, 252) : Color.WHITE;
+    }
+
+    private int optionValueBackground() {
+        return isDarkTheme() ? Color.rgb(42, 50, 70) : Color.rgb(235, 241, 255);
+    }
+
+    private int navIndicatorColor() {
+        return isDarkTheme() ? Color.rgb(41, 49, 67) : Color.rgb(232, 240, 255);
+    }
+
+    private int navTextColor() {
+        return isDarkTheme() ? Color.rgb(190, 197, 213) : Color.rgb(70, 78, 94);
+    }
+
+    private int cardStroke() {
+        return isDarkTheme() ? Color.rgb(62, 67, 80) : CARD_STROKE;
+    }
+
+    private int textPrimary() {
+        return isDarkTheme() ? Color.rgb(242, 245, 249) : TEXT_DARK;
+    }
+
+    private int textMuted() {
+        return isDarkTheme() ? Color.rgb(169, 177, 193) : TEXT_MUTED;
+    }
+
+    private int emptyTextColor() {
+        return isDarkTheme() ? Color.rgb(148, 156, 172) : Color.GRAY;
+    }
+
+    private String permissionSummary() {
+        int total = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ? 3 : 2;
+        int granted = 0;
+        if (hasCameraPermission()) {
+            granted++;
+        }
+        if (hasStoragePermission()) {
+            granted++;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && hasNotificationPermission()) {
+            granted++;
+        }
+        return tr(granted + "/" + total + " allowed", granted + "/" + total + " đã cấp");
+    }
+
+    private String permissionDetails() {
+        List<String> lines = new ArrayList<>();
+        lines.add(tr("Camera: ", "Máy ảnh: ") + permissionStateLabel(hasCameraPermission()));
+        lines.add(tr("Storage: ", "Bộ nhớ: ") + permissionStateLabel(hasStoragePermission()));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            lines.add(tr("Notifications: ", "Thông báo: ") + permissionStateLabel(hasNotificationPermission()));
+        }
+        return TextUtils.join("\n", lines);
+    }
+
+    private String permissionStateLabel(boolean granted) {
+        return granted ? tr("Allowed", "Đã cấp") : tr("Needs permission", "Cần cấp quyền");
+    }
+
+    private boolean hasCameraPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return true;
+        }
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void openAppPermissionSettings() {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(Uri.parse("package:" + getPackageName()));
+        startActivity(intent);
+    }
+
+    private void openStoragePermissionSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            } catch (Exception e) {
+                startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+            }
+        } else {
+            openAppPermissionSettings();
+        }
     }
 
     private LinearLayout.LayoutParams shortcutParams(boolean first) {
@@ -1445,9 +2099,9 @@ public class MainActivity extends AppCompatActivity {
 
     private GradientDrawable createGlassBackground() {
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(Color.argb(232, 255, 255, 255));
+        drawable.setColor(isDarkTheme() ? Color.argb(238, 31, 34, 43) : Color.argb(232, 255, 255, 255));
         drawable.setCornerRadius(dp(30));
-        drawable.setStroke(dp(1), Color.argb(245, 255, 255, 255));
+        drawable.setStroke(dp(1), isDarkTheme() ? Color.rgb(62, 67, 80) : Color.argb(245, 255, 255, 255));
         return drawable;
     }
 

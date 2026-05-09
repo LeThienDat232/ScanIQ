@@ -7,7 +7,11 @@ import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -85,6 +89,22 @@ public class DocumentRepository {
         DATABASE_EXECUTOR.execute(() -> documentDao.updateDocumentFolder(documentId, newFolderId));
     }
 
+    public void unfoldFolders(List<Folder> foldersToUnfold, List<Folder> allFolders) {
+        DATABASE_EXECUTOR.execute(() -> {
+            List<Folder> orderedFolders = new ArrayList<>(foldersToUnfold);
+            orderedFolders.sort((left, right) -> Integer.compare(
+                    folderDepth(right, allFolders),
+                    folderDepth(left, allFolders)
+            ));
+
+            for (Folder folder : orderedFolders) {
+                documentDao.moveDocumentsFromFolder(folder.id, folder.parentFolderId);
+                folderDao.moveChildFolders(folder.id, folder.parentFolderId);
+                folderDao.deleteFolder(folder);
+            }
+        });
+    }
+
     public void deleteDocumentAndFile(Document document) {
         DATABASE_EXECUTOR.execute(() -> {
             boolean isFileDeleted = FileStorageManager.deletePhysicalFile(document.filePath);
@@ -96,5 +116,30 @@ public class DocumentRepository {
 
     public void deleteFolder(Folder folder) {
         DATABASE_EXECUTOR.execute(() -> folderDao.deleteFolder(folder));
+    }
+
+    private int folderDepth(Folder folder, List<Folder> allFolders) {
+        int depth = 0;
+        Integer parentId = folder.parentFolderId;
+        Set<Integer> visitedParentIds = new HashSet<>();
+        while (parentId != null && visitedParentIds.add(parentId)) {
+            Folder parent = findFolder(parentId, allFolders);
+            if (parent == null) {
+                break;
+            }
+            depth++;
+            parentId = parent.parentFolderId;
+        }
+        return depth;
+    }
+
+    @Nullable
+    private Folder findFolder(int folderId, List<Folder> allFolders) {
+        for (Folder folder : allFolders) {
+            if (Objects.equals(folder.id, folderId)) {
+                return folder;
+            }
+        }
+        return null;
     }
 }

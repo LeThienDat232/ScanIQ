@@ -171,17 +171,32 @@ public class FilesViewModel extends AndroidViewModel {
         }
     }
 
+    public void unfoldFolders(List<Folder> foldersToUnfold) {
+        if (foldersToUnfold.isEmpty()) {
+            return;
+        }
+
+        List<Folder> currentFolders = folders.getValue();
+        repository.unfoldFolders(
+                new ArrayList<>(foldersToUnfold),
+                currentFolders == null ? new ArrayList<>() : new ArrayList<>(currentFolders)
+        );
+    }
+
     public void createFolderAndMoveDocuments(String folderName,
                                              List<Document> documents,
                                              @Nullable Integer parentFolderId) {
+        List<Object> items = new ArrayList<>(documents);
+        createFolderAndMoveItems(folderName, items, parentFolderId);
+    }
+
+    public void createFolderAndMoveItems(String folderName,
+                                         List<Object> items,
+                                         @Nullable Integer parentFolderId) {
         String uniqueName = makeUniqueFolderName(folderName, parentFolderId, null);
         repository.insertFolder(uniqueName, parentFolderId, folderId -> {
             Integer targetId = (int) folderId;
-            for (Document document : documents) {
-                if (!Objects.equals(document.folderId, -1)) {
-                    repository.updateDocument(document.copyWithFolderId(targetId));
-                }
-            }
+            moveItemsToFolder(items, targetId);
         });
     }
 

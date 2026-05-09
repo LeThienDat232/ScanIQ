@@ -1,5 +1,6 @@
 package com.smartscanner.data;
 
+import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
 import androidx.room.Dao;
 import androidx.room.Delete;
@@ -23,4 +24,7 @@ public interface FolderDao {
 
     @Update
     int updateFolder(Folder folder);
+
+    @Query("UPDATE folders SET parentFolderId = :newParentFolderId WHERE parentFolderId = :oldParentFolderId")
+    int moveChildFolders(int oldParentFolderId, @Nullable Integer newParentFolderId);
 }
