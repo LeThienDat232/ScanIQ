@@ -280,7 +280,7 @@ public class MainActivity extends AppCompatActivity {
             TextView button = new TextView(this);
             button.setText(tabLabel(tab));
             button.setGravity(Gravity.CENTER);
-            button.setTextSize(13);
+            button.setTextSize(16);
             button.setIncludeFontPadding(false);
             button.setSingleLine(true);
             button.setEllipsize(TextUtils.TruncateAt.END);
