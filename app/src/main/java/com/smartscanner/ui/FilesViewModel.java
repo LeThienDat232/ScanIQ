@@ -17,6 +17,7 @@ import com.smartscanner.data.Document;
 import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
 import com.smartscanner.data.Folder;
+import com.smartscanner.data.ImageTextIndexer;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -46,6 +47,7 @@ public class FilesViewModel extends AndroidViewModel {
 
         recentDocuments.addSource(databaseDocuments, documents -> {
             latestDatabaseDocuments = safeList(documents);
+            scheduleImageTextIndexing(latestDatabaseDocuments);
             rebuildRecentDocuments();
             rebuildSearchResults();
         });
@@ -57,6 +59,7 @@ public class FilesViewModel extends AndroidViewModel {
 
         searchResults.addSource(databaseDocuments, documents -> {
             latestDatabaseDocuments = safeList(documents);
+            scheduleImageTextIndexing(latestDatabaseDocuments);
             rebuildSearchResults();
         });
         searchResults.addSource(downloadFiles, documents -> {
@@ -129,7 +132,14 @@ public class FilesViewModel extends AndroidViewModel {
 
     public void insertDocument(@Nullable Integer folderId, String title, String filePath, String fileType) {
         Document document = new Document(folderId, title, filePath, fileType, System.currentTimeMillis());
-        repository.insertDocument(document);
+        repository.insertDocument(document, documentId -> {
+            Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
+            ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+        });
+    }
+
+    public void updateDocumentOcrText(int documentId, @Nullable String ocrText) {
+        repository.updateDocumentOcrText(documentId, ocrText);
     }
 
     public void createFolder(String name, @Nullable Integer parentFolderId) {
@@ -262,6 +272,12 @@ public class FilesViewModel extends AndroidViewModel {
         }
         matches.sort(Comparator.comparingLong((Document document) -> document.createdAt).reversed());
         searchResults.setValue(matches);
+    }
+
+    private void scheduleImageTextIndexing(List<Document> documents) {
+        for (Document document : documents) {
+            ImageTextIndexer.indexIfNeeded(getApplication(), repository, document);
+        }
     }
 
     private String makeUniqueFolderName(String baseName,

@@ -3,7 +3,6 @@ package com.smartscanner;
 import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -378,9 +377,7 @@ public class MainActivity extends AppCompatActivity {
         updateBottomNav();
         updateSystemBars();
 
-        if (tabChanged && isHomeFilesMorph(renderedTab, selectedTab)) {
-            renderHomeFilesMorphTransition(renderedTab, selectedTab);
-        } else if (tabChanged) {
+        if (tabChanged) {
             renderCurrentTabWithTransition(slideDirection);
         } else {
             contentContainer.animate().cancel();
@@ -391,11 +388,6 @@ public class MainActivity extends AppCompatActivity {
             contentContainer.setTranslationX(0f);
         }
         renderedTab = selectedTab;
-    }
-
-    private boolean isHomeFilesMorph(@Nullable BottomTab from, BottomTab to) {
-        return (from == BottomTab.HOME && to == BottomTab.FILES)
-                || (from == BottomTab.FILES && to == BottomTab.HOME);
     }
 
     private void renderSelectedTab() {
@@ -413,164 +405,6 @@ public class MainActivity extends AppCompatActivity {
                 renderOptionsScreen();
                 break;
         }
-    }
-
-    private void renderHomeFilesMorphTransition(BottomTab from, BottomTab to) {
-        LinearLayout oldContainer = contentContainer;
-        oldContainer.animate().cancel();
-
-        LinearLayout newContainer = new LinearLayout(this);
-        newContainer.setOrientation(LinearLayout.VERTICAL);
-        newContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        newContainer.setAlpha(1f);
-        newContainer.setTranslationX(0f);
-
-        FrameLayout.LayoutParams containerParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-        );
-        root.addView(newContainer, 1, containerParams);
-        root.removeView(oldContainer);
-        contentContainer = newContainer;
-
-        boolean expanding = from == BottomTab.HOME && to == BottomTab.FILES;
-        LinearLayout header = expanding ? createHeader(true) : createHeader(false, true);
-        newContainer.addView(header);
-
-        FrameLayout bodyFrame = new FrameLayout(this);
-        bodyFrame.setClipChildren(true);
-        bodyFrame.setClipToPadding(true);
-        newContainer.addView(bodyFrame, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-        ));
-
-        LinearLayout oldBody = createTransitionBody();
-        LinearLayout newBody = createTransitionBody();
-        renderBodyForTab(from, oldBody);
-        renderBodyForTab(to, newBody);
-        bodyFrame.addView(oldBody, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-        bodyFrame.addView(newBody, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        View shortcuts = header.getChildCount() > 1 ? header.getChildAt(1) : null;
-        int startHeight = expanding ? collapsedHeaderHeight() : expandedHeaderHeight();
-        int endHeight = expanding ? expandedHeaderHeight() : collapsedHeaderHeight();
-
-        ViewGroup.LayoutParams layoutParams = header.getLayoutParams();
-        if (layoutParams == null) {
-            layoutParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    startHeight
-            );
-        }
-        layoutParams.height = startHeight;
-        header.setLayoutParams(layoutParams);
-
-        if (shortcuts != null) {
-            shortcuts.setAlpha(expanding ? 0f : 1f);
-            shortcuts.setTranslationY(expanding ? -dp(14) : 0f);
-        }
-
-        android.view.animation.Interpolator interpolator =
-                android.view.animation.AnimationUtils.loadInterpolator(this, android.R.interpolator.fast_out_slow_in);
-
-        float width = root != null && root.getWidth() > 0 ? root.getWidth() : getResources().getDisplayMetrics().widthPixels;
-        float sign = to.ordinal() > from.ordinal() ? 1f : -1f;
-        oldBody.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        newBody.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        oldBody.setTranslationX(0f);
-        newBody.setTranslationX(width * sign);
-
-        ValueAnimator heightAnimator = ValueAnimator.ofInt(startHeight, endHeight);
-        heightAnimator.setDuration(330);
-        heightAnimator.setInterpolator(interpolator);
-        heightAnimator.addUpdateListener(animation -> {
-            ViewGroup.LayoutParams params = header.getLayoutParams();
-            params.height = (int) animation.getAnimatedValue();
-            header.setLayoutParams(params);
-        });
-        heightAnimator.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                if (!expanding && shortcuts != null) {
-                    header.removeView(shortcuts);
-                    header.setPadding(dp(22), getStatusBarHeight() + dp(18), dp(22), dp(28));
-                }
-
-                ViewGroup.LayoutParams params = header.getLayoutParams();
-                params.height = ViewGroup.LayoutParams.WRAP_CONTENT;
-                header.setLayoutParams(params);
-            }
-        });
-
-        oldBody.animate()
-                .translationX(-width * sign)
-                .alpha(1f)
-                .setDuration(340)
-                .setInterpolator(interpolator)
-                .setListener(null)
-                .start();
-
-        newBody.animate()
-                .translationX(0f)
-                .alpha(1f)
-                .setDuration(340)
-                .setInterpolator(interpolator)
-                .setListener(new AnimatorListenerAdapter() {
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        oldBody.animate().setListener(null);
-                        bodyFrame.removeView(oldBody);
-                        newBody.setLayerType(View.LAYER_TYPE_NONE, null);
-                        newBody.setTranslationX(0f);
-                        newContainer.setLayerType(View.LAYER_TYPE_NONE, null);
-                        bottomNavDock.bringToFront();
-                        cameraButton.bringToFront();
-                    }
-                })
-                .start();
-
-        if (shortcuts != null) {
-            shortcuts.animate()
-                    .alpha(expanding ? 1f : 0f)
-                    .translationY(expanding ? 0f : -dp(12))
-                    .setDuration(expanding ? 230 : 170)
-                    .setStartDelay(expanding ? 85 : 0)
-                    .setInterpolator(interpolator)
-                    .start();
-        }
-
-        heightAnimator.start();
-    }
-
-    private LinearLayout createTransitionBody() {
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setBackgroundColor(pageBackground());
-        return body;
-    }
-
-    private void renderBodyForTab(BottomTab tab, LinearLayout target) {
-        if (tab == BottomTab.HOME) {
-            renderHomeBody(target);
-        } else if (tab == BottomTab.FILES) {
-            renderFilesBody(target);
-        }
-    }
-
-    private int collapsedHeaderHeight() {
-        return getStatusBarHeight() + dp(18) + dp(52) + dp(28);
-    }
-
-    private int expandedHeaderHeight() {
-        return getStatusBarHeight() + dp(18) + dp(52) + dp(20) + dp(90) + dp(22);
     }
 
     private void renderCurrentTabWithTransition(int direction) {
@@ -2207,6 +2041,7 @@ public class MainActivity extends AppCompatActivity {
                         if (text == null || text.trim().isEmpty()) {
                             Toast.makeText(this, tr("No text found in image", "Không tìm thấy chữ trong ảnh"), Toast.LENGTH_SHORT).show();
                         } else {
+                            viewModel.updateDocumentOcrText(document.id, text.trim());
                             showOcrResult(text);
                         }
                     })

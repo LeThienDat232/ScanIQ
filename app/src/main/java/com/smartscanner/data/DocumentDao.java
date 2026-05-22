@@ -39,6 +39,9 @@ public interface DocumentDao {
     @Query("UPDATE documents SET folderId = :newFolderId WHERE id = :documentId")
     int updateDocumentFolder(int documentId, @Nullable Integer newFolderId);
 
+    @Query("UPDATE documents SET ocrText = :ocrText WHERE id = :documentId")
+    int updateDocumentOcrText(int documentId, @Nullable String ocrText);
+
     @Query("UPDATE documents SET folderId = :newFolderId WHERE folderId = :oldFolderId")
     int moveDocumentsFromFolder(int oldFolderId, @Nullable Integer newFolderId);
 

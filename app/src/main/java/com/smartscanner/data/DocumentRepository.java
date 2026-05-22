@@ -95,6 +95,10 @@ public class DocumentRepository {
         DATABASE_EXECUTOR.execute(() -> documentDao.insertDocument(document));
     }
 
+    public void updateDocumentOcrText(int documentId, @Nullable String ocrText) {
+        DATABASE_EXECUTOR.execute(() -> documentDao.updateDocumentOcrText(documentId, ocrText));
+    }
+
     public void updateFolder(Folder folder) {
         DATABASE_EXECUTOR.execute(() -> folderDao.updateFolder(folder));
     }
