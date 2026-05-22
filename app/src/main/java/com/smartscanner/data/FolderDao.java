@@ -19,6 +19,9 @@ public interface FolderDao {
     @Query("SELECT * FROM folders ORDER BY createdAt DESC")
     LiveData<List<Folder>> getAllFolders();
 
+    @Query("SELECT * FROM folders")
+    List<Folder> getAllFoldersSnapshot();
+
     @Delete
     int deleteFolder(Folder folder);
 
@@ -27,4 +30,7 @@ public interface FolderDao {
 
     @Query("UPDATE folders SET parentFolderId = :newParentFolderId WHERE parentFolderId = :oldParentFolderId")
     int moveChildFolders(int oldParentFolderId, @Nullable Integer newParentFolderId);
+
+    @Query("DELETE FROM folders WHERE id IN (:folderIds)")
+    int deleteFoldersByIds(List<Integer> folderIds);
 }

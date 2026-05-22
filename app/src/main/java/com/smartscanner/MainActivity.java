@@ -18,6 +18,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Point;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -31,6 +32,7 @@ import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.DragEvent;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
@@ -74,9 +76,11 @@ import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -95,6 +99,10 @@ public class MainActivity extends AppCompatActivity {
     private static final int CARD_STROKE = Color.rgb(226, 232, 240);
     private static final int TEXT_DARK = Color.rgb(32, 33, 36);
     private static final int TEXT_MUTED = Color.rgb(107, 114, 128);
+    private static final String DRAG_LABEL = "smartscanner-selection-drag";
+    private static final String DOCUMENT_KEY_PREFIX = "DOC:";
+    private static final String DOWNLOAD_KEY_PREFIX = "DOWNLOAD:";
+    private static final String FOLDER_KEY_PREFIX = "FOLDER:";
 
     private FilesViewModel viewModel;
     private FrameLayout root;
@@ -111,7 +119,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean showingDownloads = false;
     @Nullable
     private Folder openedFolder = null;
-    private final Set<Object> selectedItems = new HashSet<>();
+    private final Set<String> selectedItemKeys = new HashSet<>();
+    private final Map<String, MaterialCardView> explorerCardsByKey = new HashMap<>();
 
     private List<Folder> cachedFolders = new ArrayList<>();
     private List<Document> cachedDatabaseDocuments = new ArrayList<>();
@@ -183,14 +192,17 @@ public class MainActivity extends AppCompatActivity {
     private void observeViewModel() {
         viewModel.getFolders().observe(this, folders -> {
             cachedFolders = safeFolderList(folders);
+            pruneSelectedItems();
             renderCurrentTab();
         });
         viewModel.getDatabaseDocuments().observe(this, documents -> {
             cachedDatabaseDocuments = safeDocumentList(documents);
+            pruneSelectedItems();
             renderCurrentTab();
         });
         viewModel.getDownloadFiles().observe(this, documents -> {
             cachedDownloadFiles = safeDocumentList(documents);
+            pruneSelectedItems();
             renderCurrentTab();
         });
         viewModel.getRecentDocuments().observe(this, documents -> {
@@ -286,7 +298,7 @@ public class MainActivity extends AppCompatActivity {
             button.setEllipsize(TextUtils.TruncateAt.END);
             button.setOnClickListener(v -> {
                 selectedTab = tab;
-                selectedItems.clear();
+                selectedItemKeys.clear();
                 renderCurrentTab();
             });
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
@@ -686,6 +698,7 @@ public class MainActivity extends AppCompatActivity {
             target.addView(createBackRow());
         }
 
+        explorerCardsByKey.clear();
         List<ExplorerItem> explorerItems = buildExplorerItems();
         ScrollView scrollView = new ScrollView(this);
         scrollView.setClipToPadding(false);
@@ -1012,7 +1025,7 @@ public class MainActivity extends AppCompatActivity {
             );
             shortcutRowParams.setMargins(0, dp(20), 0, 0);
 
-            if (selectedItems.isEmpty()) {
+            if (selectedItemKeys.isEmpty()) {
                 shortcuts.addView(createShortcutButton(tr("Upload file", "Tải tệp"), R.drawable.ic_upload_file_shortcut, v -> filePickerLauncher.launch("*/*")), shortcutParams(true));
                 shortcuts.addView(createShortcutButton(tr("Upload image", "Tải ảnh"), R.drawable.ic_upload_image_shortcut, v -> imagePickerLauncher.launch("image/*")), shortcutParams(false));
                 shortcuts.addView(createShortcutButton(tr("Create folder", "Tạo thư mục"), R.drawable.ic_create_file_shortcut, v -> viewModel.createFolder(tr("New Folder", "Thư mục mới"), currentFolderId())), shortcutParams(false));
@@ -1055,6 +1068,7 @@ public class MainActivity extends AppCompatActivity {
         title.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        attachParentDropTarget(row);
         return row;
     }
 
@@ -1138,9 +1152,12 @@ public class MainActivity extends AppCompatActivity {
         card.setRadius(dp(14));
         card.setUseCompatPadding(false);
         card.setCardBackgroundColor(Color.TRANSPARENT);
-        card.setStrokeWidth(isSelected(item.originalItem) ? dp(2) : 0);
-        card.setStrokeColor(isSelected(item.originalItem) ? appBlue() : Color.TRANSPARENT);
+        applyExplorerSelectionStyle(card, item.originalItem);
         card.setMinimumHeight(dp(166));
+        String itemKey = itemKey(item.originalItem);
+        if (itemKey != null) {
+            explorerCardsByKey.put(itemKey, card);
+        }
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -1183,9 +1200,16 @@ public class MainActivity extends AppCompatActivity {
             attachItemGestures(
                     card,
                     () -> handleExplorerClick(item),
-                    () -> selectItem(item.originalItem),
-                    () -> showRenameDialog(item.originalItem)
+                    () -> handleExplorerLongPress(item, card),
+                    () -> {
+                        if (selectedItemKeys.isEmpty()) {
+                            showRenameDialog(item.originalItem);
+                        }
+                    }
             );
+            if (item.originalItem instanceof Folder) {
+                attachFolderDropTarget(card, item, (Folder) item.originalItem);
+            }
         }
         return card;
     }
@@ -1346,7 +1370,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleExplorerClick(ExplorerItem item) {
-        if (!selectedItems.isEmpty() && !item.isVirtualDownloads()) {
+        if (!selectedItemKeys.isEmpty() && !item.isVirtualDownloads()) {
             toggleSelection(item.originalItem);
             return;
         }
@@ -1358,7 +1382,7 @@ public class MainActivity extends AppCompatActivity {
         } else if (item.originalItem instanceof Folder) {
             openedFolder = (Folder) item.originalItem;
             showingDownloads = false;
-            selectedItems.clear();
+            selectedItemKeys.clear();
             renderCurrentTab();
         } else if (item.originalItem instanceof Document) {
             Document document = (Document) item.originalItem;
@@ -1367,7 +1391,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void navigateUp() {
-        selectedItems.clear();
+        selectedItemKeys.clear();
         if (showingDownloads) {
             showingDownloads = false;
         } else if (openedFolder != null) {
@@ -1464,13 +1488,422 @@ public class MainActivity extends AppCompatActivity {
         view.setOnTouchListener((v, event) -> detector.onTouchEvent(event));
     }
 
+    private void handleExplorerLongPress(ExplorerItem item, View dragSource) {
+        if (item == null || item.isVirtualDownloads()) {
+            return;
+        }
+
+        if (!selectedItemKeys.isEmpty() && isSelected(item.originalItem)) {
+            if (startSelectedItemsDrag(dragSource)) {
+                return;
+            }
+        }
+
+        selectItem(item.originalItem);
+    }
+
+    private boolean startSelectedItemsDrag(View dragSource) {
+        List<Object> movableItems = normalizeMoveItems(resolveSelectedMovableItems());
+        if (movableItems.isEmpty()) {
+            Toast.makeText(this, tr("No app files selected", "Khong co tep trong app duoc chon"), Toast.LENGTH_SHORT).show();
+            return false;
+        }
+
+        DragPayload payload = new DragPayload(new ArrayList<>(selectedItemKeys));
+        ClipData dragData = ClipData.newPlainText(DRAG_LABEL, String.valueOf(movableItems.size()));
+        return dragSource.startDragAndDrop(
+                dragData,
+                new SelectionDragShadow(dragSource, movableItems.size()),
+                payload,
+                0
+        );
+    }
+
+    private void attachFolderDropTarget(MaterialCardView card, ExplorerItem item, Folder targetFolder) {
+        card.setOnDragListener((view, event) -> {
+            DragPayload payload = dragPayload(event);
+            switch (event.getAction()) {
+                case DragEvent.ACTION_DRAG_STARTED:
+                    return payload != null;
+                case DragEvent.ACTION_DRAG_ENTERED:
+                    if (canDropPayloadTo(payload, targetFolder.id)) {
+                        setExplorerDropHighlight(card, true, item.originalItem);
+                    }
+                    return true;
+                case DragEvent.ACTION_DRAG_EXITED:
+                    setExplorerDropHighlight(card, false, item.originalItem);
+                    return true;
+                case DragEvent.ACTION_DROP:
+                    setExplorerDropHighlight(card, false, item.originalItem);
+                    if (canDropPayloadTo(payload, targetFolder.id)) {
+                        moveDraggedItemsTo(payload, targetFolder.id);
+                    } else {
+                        showInvalidDropToast();
+                    }
+                    return true;
+                case DragEvent.ACTION_DRAG_ENDED:
+                    setExplorerDropHighlight(card, false, item.originalItem);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    private void attachParentDropTarget(LinearLayout row) {
+        if (showingDownloads || openedFolder == null) {
+            return;
+        }
+
+        Integer parentFolderId = openedFolder.parentFolderId;
+        row.setOnDragListener((view, event) -> {
+            DragPayload payload = dragPayload(event);
+            switch (event.getAction()) {
+                case DragEvent.ACTION_DRAG_STARTED:
+                    return payload != null;
+                case DragEvent.ACTION_DRAG_ENTERED:
+                    if (canDropPayloadTo(payload, parentFolderId)) {
+                        setParentDropHighlight(row, true);
+                    }
+                    return true;
+                case DragEvent.ACTION_DRAG_EXITED:
+                    setParentDropHighlight(row, false);
+                    return true;
+                case DragEvent.ACTION_DROP:
+                    setParentDropHighlight(row, false);
+                    if (canDropPayloadTo(payload, parentFolderId)) {
+                        moveDraggedItemsTo(payload, parentFolderId);
+                    } else {
+                        showInvalidDropToast();
+                    }
+                    return true;
+                case DragEvent.ACTION_DRAG_ENDED:
+                    setParentDropHighlight(row, false);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    @Nullable
+    private DragPayload dragPayload(DragEvent event) {
+        Object localState = event.getLocalState();
+        return localState instanceof DragPayload ? (DragPayload) localState : null;
+    }
+
+    private void setExplorerDropHighlight(MaterialCardView card, boolean highlighted, Object item) {
+        if (highlighted) {
+            card.setStrokeWidth(dp(2));
+            card.setStrokeColor(appBlue());
+            card.setCardBackgroundColor(Color.argb(24, 51, 103, 239));
+            return;
+        }
+
+        applyExplorerSelectionStyle(card, item);
+    }
+
+    private void applyExplorerSelectionStyle(MaterialCardView card, Object item) {
+        card.setCardBackgroundColor(Color.TRANSPARENT);
+        card.setStrokeWidth(isSelected(item) ? dp(2) : 0);
+        card.setStrokeColor(isSelected(item) ? appBlue() : Color.TRANSPARENT);
+    }
+
+    private void refreshSelectionUi() {
+        if (selectedTab != BottomTab.FILES || contentContainer == null) {
+            renderCurrentTab();
+            return;
+        }
+
+        refreshFilesHeader();
+        for (Map.Entry<String, MaterialCardView> entry : explorerCardsByKey.entrySet()) {
+            Object item = findItemByKey(entry.getKey());
+            if (item != null) {
+                applyExplorerSelectionStyle(entry.getValue(), item);
+            }
+        }
+    }
+
+    private void refreshFilesHeader() {
+        if (contentContainer.getChildCount() == 0) {
+            return;
+        }
+
+        contentContainer.removeViewAt(0);
+        contentContainer.addView(createHeader(true), 0);
+    }
+
+    private void setParentDropHighlight(View row, boolean highlighted) {
+        row.setBackground(highlighted
+                ? createRoundedBackground(Color.argb(28, 51, 103, 239), dp(18))
+                : null);
+    }
+
+    private boolean canDropPayloadTo(@Nullable DragPayload payload, @Nullable Integer targetFolderId) {
+        if (payload == null) {
+            return false;
+        }
+
+        List<Object> items = normalizeMoveItems(resolveMovableItems(payload.selectedKeys));
+        return canMoveItemsToFolder(items, targetFolderId) && countItemsMoving(items, targetFolderId) > 0;
+    }
+
+    private void moveDraggedItemsTo(@Nullable DragPayload payload, @Nullable Integer targetFolderId) {
+        if (payload == null) {
+            return;
+        }
+
+        List<Object> items = normalizeMoveItems(resolveMovableItems(payload.selectedKeys));
+        if (items.isEmpty()) {
+            Toast.makeText(this, tr("No app files selected", "Khong co tep trong app duoc chon"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!canMoveItemsToFolder(items, targetFolderId)) {
+            showInvalidDropToast();
+            return;
+        }
+
+        int expectedMoves = countItemsMoving(items, targetFolderId);
+        if (expectedMoves == 0) {
+            Toast.makeText(this, tr("Already in that folder", "Da o dung thu muc"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        viewModel.moveItemsToFolder(items, targetFolderId, movedCount -> {
+            int count = movedCount > 0 ? movedCount : expectedMoves;
+            Toast.makeText(this, tr("Moved ", "Da chuyen ") + count + tr(" items", " muc"), Toast.LENGTH_SHORT).show();
+        });
+        selectedItemKeys.clear();
+        renderCurrentTab();
+    }
+
+    private void showInvalidDropToast() {
+        Toast.makeText(this, tr("Cannot move selected items there", "Khong the chuyen vao day"), Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean canMoveItemsToFolder(List<Object> items, @Nullable Integer targetFolderId) {
+        if (items.isEmpty()) {
+            return false;
+        }
+        if (targetFolderId != null && findFolderById(targetFolderId) == null) {
+            return false;
+        }
+
+        for (Object item : items) {
+            if (item instanceof Document) {
+                Document document = (Document) item;
+                if (Objects.equals(document.folderId, -1)) {
+                    return false;
+                }
+            } else if (item instanceof Folder) {
+                Folder folder = (Folder) item;
+                if (Objects.equals(folder.id, targetFolderId)) {
+                    return false;
+                }
+                if (targetFolderId != null && isFolderInside(targetFolderId, folder.id)) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int countItemsMoving(List<Object> items, @Nullable Integer targetFolderId) {
+        int count = 0;
+        for (Object item : items) {
+            if (item instanceof Document) {
+                Document document = (Document) item;
+                if (!Objects.equals(document.folderId, targetFolderId)) {
+                    count++;
+                }
+            } else if (item instanceof Folder) {
+                Folder folder = (Folder) item;
+                if (!Objects.equals(folder.parentFolderId, targetFolderId)) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private List<Object> normalizeMoveItems(List<Object> items) {
+        Set<Integer> selectedFolderIds = new HashSet<>();
+        for (Object item : items) {
+            if (item instanceof Folder) {
+                selectedFolderIds.add(((Folder) item).id);
+            }
+        }
+
+        List<Object> normalized = new ArrayList<>();
+        for (Object item : items) {
+            if (item instanceof Document) {
+                normalized.add(item);
+            } else if (item instanceof Folder) {
+                Folder folder = (Folder) item;
+                if (!hasSelectedAncestor(folder, selectedFolderIds)) {
+                    normalized.add(folder);
+                }
+            }
+        }
+        return normalized;
+    }
+
+    private boolean hasSelectedAncestor(Folder folder, Set<Integer> selectedFolderIds) {
+        Integer parentId = folder.parentFolderId;
+        Set<Integer> visited = new HashSet<>();
+        while (parentId != null && visited.add(parentId)) {
+            if (selectedFolderIds.contains(parentId)) {
+                return true;
+            }
+            Folder parent = findFolderById(parentId);
+            parentId = parent == null ? null : parent.parentFolderId;
+        }
+        return false;
+    }
+
+    private boolean isFolderInside(int possibleChildFolderId, int ancestorFolderId) {
+        Integer currentId = possibleChildFolderId;
+        Set<Integer> visited = new HashSet<>();
+        while (currentId != null && visited.add(currentId)) {
+            if (currentId == ancestorFolderId) {
+                return true;
+            }
+            Folder folder = findFolderById(currentId);
+            currentId = folder == null ? null : folder.parentFolderId;
+        }
+        return false;
+    }
+
+    private void addSelectedItem(Object item) {
+        String key = itemKey(item);
+        if (key != null) {
+            selectedItemKeys.add(key);
+        }
+    }
+
+    private List<Object> resolveSelectedItems() {
+        return resolveItems(new ArrayList<>(selectedItemKeys), false);
+    }
+
+    private List<Object> resolveSelectedMovableItems() {
+        return resolveItems(new ArrayList<>(selectedItemKeys), true);
+    }
+
+    private List<Object> resolveMovableItems(List<String> keys) {
+        return resolveItems(keys, true);
+    }
+
+    private List<Object> resolveItems(List<String> keys, boolean movableOnly) {
+        List<Object> items = new ArrayList<>();
+        for (String key : keys) {
+            Object item = findItemByKey(key);
+            if (item != null && (!movableOnly || isMovableAppItem(item))) {
+                items.add(item);
+            }
+        }
+        return items;
+    }
+
+    @Nullable
+    private Object findItemByKey(String key) {
+        if (key == null) {
+            return null;
+        }
+
+        if (key.startsWith(DOCUMENT_KEY_PREFIX)) {
+            Integer documentId = parseKeyId(key, DOCUMENT_KEY_PREFIX);
+            if (documentId == null) {
+                return null;
+            }
+            for (Document document : cachedDatabaseDocuments) {
+                if (document.id == documentId) {
+                    return document;
+                }
+            }
+        } else if (key.startsWith(DOWNLOAD_KEY_PREFIX)) {
+            Integer documentId = parseKeyId(key, DOWNLOAD_KEY_PREFIX);
+            if (documentId == null) {
+                return null;
+            }
+            for (Document document : cachedDownloadFiles) {
+                if (document.id == documentId) {
+                    return document;
+                }
+            }
+        } else if (key.startsWith(FOLDER_KEY_PREFIX)) {
+            Integer folderId = parseKeyId(key, FOLDER_KEY_PREFIX);
+            return folderId == null ? null : findFolderById(folderId);
+        }
+        return null;
+    }
+
+    @Nullable
+    private String itemKey(Object item) {
+        if (item instanceof Document) {
+            Document document = (Document) item;
+            String prefix = Objects.equals(document.folderId, -1) ? DOWNLOAD_KEY_PREFIX : DOCUMENT_KEY_PREFIX;
+            return prefix + document.id;
+        }
+        if (item instanceof Folder) {
+            return FOLDER_KEY_PREFIX + ((Folder) item).id;
+        }
+        return null;
+    }
+
+    @Nullable
+    private Integer parseKeyId(String key, String prefix) {
+        try {
+            return Integer.parseInt(key.substring(prefix.length()));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private Folder findFolderById(int folderId) {
+        for (Folder folder : cachedFolders) {
+            if (folder.id == folderId) {
+                return folder;
+            }
+        }
+        return null;
+    }
+
+    private boolean isMovableAppItem(Object item) {
+        if (item instanceof Folder) {
+            return true;
+        }
+        return item instanceof Document && !Objects.equals(((Document) item).folderId, -1);
+    }
+
+    private void pruneSelectedItems() {
+        if (selectedItemKeys.isEmpty()) {
+            return;
+        }
+
+        Set<String> validKeys = new HashSet<>();
+        for (String key : selectedItemKeys) {
+            if (findItemByKey(key) != null) {
+                validKeys.add(key);
+            }
+        }
+        selectedItemKeys.clear();
+        selectedItemKeys.addAll(validKeys);
+    }
+
     private void selectItem(Object item) {
         if (item == null || ExplorerItem.VIRTUAL_DOWNLOADS.equals(item)) {
             return;
         }
-        selectedItems.clear();
-        selectedItems.add(item);
-        renderCurrentTab();
+        String key = itemKey(item);
+        if (key == null) {
+            return;
+        }
+        selectedItemKeys.clear();
+        selectedItemKeys.add(key);
+        refreshSelectionUi();
     }
 
     private void showItemActions(Object item) {
@@ -1489,8 +1922,8 @@ public class MainActivity extends AppCompatActivity {
                         if (which == 0) {
                             openFile(document.filePath, document.fileType);
                         } else if (which == 1) {
-                            selectedItems.add(document);
-                            renderCurrentTab();
+                            addSelectedItem(document);
+                            refreshSelectionUi();
                         } else if (which == 2) {
                             showRenameDialog(document);
                         } else if (which == 3) {
@@ -1516,8 +1949,8 @@ public class MainActivity extends AppCompatActivity {
                             showingDownloads = false;
                             renderCurrentTab();
                         } else if (which == 1) {
-                            selectedItems.add(folder);
-                            renderCurrentTab();
+                            addSelectedItem(folder);
+                            refreshSelectionUi();
                         } else if (which == 2) {
                             showRenameDialog(folder);
                         } else if (which == 3) {
@@ -1568,14 +2001,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void deleteSelectedItems() {
-        if (selectedItems.isEmpty()) {
+        if (selectedItemKeys.isEmpty()) {
             return;
         }
-        List<Object> items = new ArrayList<>(selectedItems);
+        List<Object> items = resolveSelectedItems();
         for (Object item : items) {
             deleteItem(item);
         }
-        selectedItems.clear();
+        selectedItemKeys.clear();
         renderCurrentTab();
     }
 
@@ -1594,7 +2027,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void shareSelectedItems() {
         List<Document> documents = new ArrayList<>();
-        for (Object item : selectedItems) {
+        for (Object item : resolveSelectedItems()) {
             if (item instanceof Document) {
                 documents.add((Document) item);
             }
@@ -1633,7 +2066,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean hasSelectedFolder() {
-        for (Object item : selectedItems) {
+        for (Object item : resolveSelectedItems()) {
             if (item instanceof Folder) {
                 return true;
             }
@@ -1643,7 +2076,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void unfoldSelectedFolders() {
         List<Folder> folders = new ArrayList<>();
-        for (Object item : selectedItems) {
+        for (Object item : resolveSelectedItems()) {
             if (item instanceof Folder) {
                 folders.add((Folder) item);
             }
@@ -1655,22 +2088,12 @@ public class MainActivity extends AppCompatActivity {
 
         viewModel.unfoldFolders(folders);
         Toast.makeText(this, tr("Unfolded ", "Đã mở bung ") + folders.size() + tr(" folders", " thư mục"), Toast.LENGTH_SHORT).show();
-        selectedItems.clear();
+        selectedItemKeys.clear();
         renderCurrentTab();
     }
 
     private void moveSelectedToNewFolder() {
-        List<Object> items = new ArrayList<>();
-        for (Object item : selectedItems) {
-            if (item instanceof Document) {
-                Document document = (Document) item;
-                if (!Objects.equals(document.folderId, -1)) {
-                    items.add(document);
-                }
-            } else if (item instanceof Folder) {
-                items.add(item);
-            }
-        }
+        List<Object> items = normalizeMoveItems(resolveSelectedMovableItems());
         if (items.isEmpty()) {
             Toast.makeText(this, tr("No app files selected", "Chưa chọn tệp trong app"), Toast.LENGTH_SHORT).show();
             return;
@@ -1678,7 +2101,7 @@ public class MainActivity extends AppCompatActivity {
 
         viewModel.createFolderAndMoveItems(tr("New Grouped Folder", "Thư mục nhóm mới"), items, currentFolderId());
         Toast.makeText(this, tr("Moved ", "Đã chuyển ") + items.size() + tr(" items", " mục"), Toast.LENGTH_SHORT).show();
-        selectedItems.clear();
+        selectedItemKeys.clear();
         renderCurrentTab();
     }
 
@@ -1907,16 +2330,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void toggleSelection(Object item) {
-        if (selectedItems.contains(item)) {
-            selectedItems.remove(item);
-        } else {
-            selectedItems.add(item);
+        String key = itemKey(item);
+        if (key == null) {
+            return;
         }
-        renderCurrentTab();
+        if (selectedItemKeys.contains(key)) {
+            selectedItemKeys.remove(key);
+        } else {
+            selectedItemKeys.add(key);
+        }
+        refreshSelectionUi();
     }
 
     private boolean isSelected(Object item) {
-        return item != null && selectedItems.contains(item);
+        String key = itemKey(item);
+        return key != null && selectedItemKeys.contains(key);
     }
 
     @Nullable
@@ -2212,9 +2640,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        if (!selectedItems.isEmpty()) {
-            selectedItems.clear();
-            renderCurrentTab();
+        if (!selectedItemKeys.isEmpty()) {
+            selectedItemKeys.clear();
+            refreshSelectionUi();
         } else if (selectedTab == BottomTab.FILES && (showingDownloads || openedFolder != null)) {
             navigateUp();
         } else {
@@ -2376,6 +2804,59 @@ public class MainActivity extends AppCompatActivity {
                 default:
                     return Color.rgb(97, 97, 97);
             }
+        }
+    }
+
+    private static class DragPayload {
+        final List<String> selectedKeys;
+
+        DragPayload(List<String> selectedKeys) {
+            this.selectedKeys = selectedKeys;
+        }
+    }
+
+    private static class SelectionDragShadow extends View.DragShadowBuilder {
+        private final View source;
+        private final int count;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        SelectionDragShadow(View source, int count) {
+            super(source);
+            this.source = source;
+            this.count = count;
+        }
+
+        @Override
+        public void onProvideShadowMetrics(Point size, Point touch) {
+            int width = Math.max(1, source.getWidth());
+            int height = Math.max(1, source.getHeight());
+            size.set(width, height);
+            touch.set(width / 2, height / 2);
+        }
+
+        @Override
+        public void onDrawShadow(Canvas canvas) {
+            source.draw(canvas);
+            if (count <= 1) {
+                return;
+            }
+
+            float density = source.getResources().getDisplayMetrics().density;
+            float radius = 14f * density;
+            float centerX = source.getWidth() - radius - 4f * density;
+            float centerY = radius + 4f * density;
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(51, 103, 239));
+            canvas.drawCircle(centerX, centerY, radius, paint);
+
+            paint.setColor(Color.WHITE);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTextSize(13f * density);
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            float textY = centerY - (metrics.ascent + metrics.descent) / 2f;
+            canvas.drawText(String.valueOf(count), centerX, textY, paint);
         }
     }
 

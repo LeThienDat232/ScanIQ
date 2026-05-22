@@ -24,6 +24,9 @@ public interface DocumentDao {
     @Query("SELECT * FROM documents ORDER BY createdAt DESC")
     LiveData<List<Document>> getAllDocuments();
 
+    @Query("SELECT * FROM documents WHERE folderId IN (:folderIds)")
+    List<Document> getDocumentsInFolders(List<Integer> folderIds);
+
     @Query("SELECT * FROM documents ORDER BY createdAt DESC LIMIT 10")
     LiveData<List<Document>> getRecentDocuments();
 
@@ -38,4 +41,7 @@ public interface DocumentDao {
 
     @Query("UPDATE documents SET folderId = :newFolderId WHERE folderId = :oldFolderId")
     int moveDocumentsFromFolder(int oldFolderId, @Nullable Integer newFolderId);
+
+    @Query("DELETE FROM documents WHERE folderId IN (:folderIds)")
+    int deleteDocumentsInFolders(List<Integer> folderIds);
 }

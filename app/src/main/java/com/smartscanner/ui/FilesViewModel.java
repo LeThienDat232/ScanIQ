@@ -40,7 +40,7 @@ public class FilesViewModel extends AndroidViewModel {
     public FilesViewModel(@NonNull Application application) {
         super(application);
         AppDatabase database = AppDatabase.getDatabase(application);
-        repository = new DocumentRepository(database.documentDao(), database.folderDao());
+        repository = new DocumentRepository(database, database.documentDao(), database.folderDao());
         folders = repository.getAllFolders();
         databaseDocuments = repository.getAllDocuments();
 
@@ -156,19 +156,28 @@ public class FilesViewModel extends AndroidViewModel {
     }
 
     public void moveItemsToFolder(List<Object> items, @Nullable Integer targetFolderId) {
+        moveItemsToFolder(items, targetFolderId, null);
+    }
+
+    public void moveItemsToFolder(List<Object> items,
+                                  @Nullable Integer targetFolderId,
+                                  @Nullable DocumentRepository.MoveCallback callback) {
+        List<Document> documents = new ArrayList<>();
+        List<Folder> folders = new ArrayList<>();
         for (Object item : items) {
             if (item instanceof Document) {
                 Document document = (Document) item;
                 if (!Objects.equals(document.folderId, -1)) {
-                    repository.updateDocument(document.copyWithFolderId(targetFolderId));
+                    documents.add(document);
                 }
             } else if (item instanceof Folder) {
                 Folder folder = (Folder) item;
                 if (!Objects.equals(folder.id, targetFolderId)) {
-                    repository.updateFolder(folder.copyWithParent(targetFolderId));
+                    folders.add(folder);
                 }
             }
         }
+        repository.moveItemsToFolder(documents, folders, targetFolderId, callback);
     }
 
     public void unfoldFolders(List<Folder> foldersToUnfold) {
