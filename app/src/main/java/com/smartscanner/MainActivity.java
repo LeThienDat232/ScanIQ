@@ -30,6 +30,7 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.DragEvent;
 import android.view.GestureDetector;
@@ -48,6 +49,7 @@ import android.widget.Space;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.IntentSenderRequest;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
@@ -61,6 +63,10 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanner;
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions;
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning;
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import com.smartscanner.data.Document;
@@ -84,6 +90,7 @@ import java.util.Objects;
 import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "MainActivity";
     private static final String PREFS_NAME = "smart_scanner_options";
     private static final String PREF_THEME = "theme";
     private static final String PREF_LANGUAGE = "language";
@@ -102,6 +109,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String DOCUMENT_KEY_PREFIX = "DOC:";
     private static final String DOWNLOAD_KEY_PREFIX = "DOWNLOAD:";
     private static final String FOLDER_KEY_PREFIX = "FOLDER:";
+    private static final int DOCUMENT_SCANNER_PAGE_LIMIT = 25;
 
     private FilesViewModel viewModel;
     private FrameLayout root;
@@ -113,6 +121,7 @@ public class MainActivity extends AppCompatActivity {
 
     private ActivityResultLauncher<String> filePickerLauncher;
     private ActivityResultLauncher<String> imagePickerLauncher;
+    private ActivityResultLauncher<IntentSenderRequest> documentScannerLauncher;
 
     private BottomTab selectedTab = BottomTab.HOME;
     private boolean showingDownloads = false;
@@ -169,6 +178,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupActivityResultLaunchers() {
+        documentScannerLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartIntentSenderForResult(),
+                result -> {
+                    if (result.getResultCode() == RESULT_OK) {
+                        handleDocumentScannerResult(GmsDocumentScanningResult.fromActivityResultIntent(result.getData()));
+                    }
+                }
+        );
+
         filePickerLauncher = registerForActivityResult(
                 new ActivityResultContracts.GetContent(),
                 uri -> {
@@ -186,6 +204,137 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
         );
+    }
+
+    private void launchDocumentScanner() {
+        if (documentScannerLauncher == null) {
+            openBasicCameraFallback(null);
+            return;
+        }
+
+        setCameraButtonBusy(true);
+        GmsDocumentScannerOptions options = new GmsDocumentScannerOptions.Builder()
+                .setGalleryImportAllowed(false)
+                .setPageLimit(DOCUMENT_SCANNER_PAGE_LIMIT)
+                .setResultFormats(
+                        GmsDocumentScannerOptions.RESULT_FORMAT_JPEG,
+                        GmsDocumentScannerOptions.RESULT_FORMAT_PDF
+                )
+                .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+                .build();
+        GmsDocumentScanner scanner = GmsDocumentScanning.getClient(options);
+        scanner.getStartScanIntent(this)
+                .addOnSuccessListener(intentSender -> {
+                    setCameraButtonBusy(false);
+                    try {
+                        documentScannerLauncher.launch(new IntentSenderRequest.Builder(intentSender).build());
+                    } catch (Exception e) {
+                        openBasicCameraFallback(e);
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    setCameraButtonBusy(false);
+                    openBasicCameraFallback(e);
+                });
+    }
+
+    private void handleDocumentScannerResult(@Nullable GmsDocumentScanningResult scannerResult) {
+        if (scannerResult == null) {
+            Toast.makeText(this, tr("Scan failed", "Quét thất bại"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Integer targetFolderId = currentFolderId();
+        DocumentRepository.DATABASE_EXECUTOR.execute(() -> saveDocumentScannerResult(scannerResult, targetFolderId));
+    }
+
+    private void saveDocumentScannerResult(GmsDocumentScanningResult scannerResult, @Nullable Integer targetFolderId) {
+        List<Uri> pageImageUris = getScannerPageUris(scannerResult);
+        GmsDocumentScanningResult.Pdf pdf = scannerResult.getPdf();
+        long timestamp = System.currentTimeMillis();
+        int pageCount = pdf != null && pdf.getPageCount() > 0 ? pdf.getPageCount() : pageImageUris.size();
+
+        String filePath = null;
+        String mimeType = "application/pdf";
+        if (pdf != null && pdf.getUri() != null) {
+            filePath = FileStorageManager.saveFileFromUri(
+                    this,
+                    pdf.getUri(),
+                    buildScanFileName(timestamp, pageCount, ".pdf")
+            );
+        } else if (!pageImageUris.isEmpty()) {
+            mimeType = "image/jpeg";
+            filePath = FileStorageManager.saveFileFromUri(
+                    this,
+                    pageImageUris.get(0),
+                    buildScanFileName(timestamp, pageCount, ".jpg")
+            );
+        }
+
+        if (filePath == null) {
+            runOnUiThread(() -> Toast.makeText(this, tr("Scan save failed", "Lưu bản quét thất bại"), Toast.LENGTH_SHORT).show());
+            return;
+        }
+
+        File savedFile = new File(filePath);
+        String title = savedFile.getName();
+        String finalFilePath = filePath;
+        String finalMimeType = mimeType;
+        runOnUiThread(() -> viewModel.insertScannedDocument(
+                targetFolderId,
+                title,
+                finalFilePath,
+                finalMimeType,
+                pageImageUris,
+                documentId -> {
+                    String message = pageCount > 1
+                            ? tr("Scanned ", "Đã quét ") + pageCount + tr(" pages: ", " trang: ") + title
+                            : tr("Scanned: ", "Đã quét: ") + title;
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+                    if (selectedTab == BottomTab.FILES) {
+                        renderCurrentTab();
+                    }
+                }
+        ));
+    }
+
+    private List<Uri> getScannerPageUris(GmsDocumentScanningResult scannerResult) {
+        List<Uri> pageUris = new ArrayList<>();
+        List<GmsDocumentScanningResult.Page> pages = scannerResult.getPages();
+        if (pages == null) {
+            return pageUris;
+        }
+        for (GmsDocumentScanningResult.Page page : pages) {
+            if (page != null && page.getImageUri() != null) {
+                pageUris.add(page.getImageUri());
+            }
+        }
+        return pageUris;
+    }
+
+    private String buildScanFileName(long timestamp, int pageCount, String extension) {
+        String pageSuffix = pageCount > 1 ? "_" + pageCount + "_pages" : "";
+        return "SCAN_" + timestamp + pageSuffix + extension;
+    }
+
+    private void openBasicCameraFallback(@Nullable Exception exception) {
+        if (exception != null) {
+            Log.w(TAG, "Document scanner unavailable; opening basic camera", exception);
+            Toast.makeText(
+                    this,
+                    tr("Document scanner unavailable. Opening basic camera.", "Máy quét tài liệu không khả dụng. Đang mở camera cơ bản."),
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+        startActivity(new Intent(this, CameraCaptureActivity.class));
+    }
+
+    private void setCameraButtonBusy(boolean busy) {
+        if (cameraButton == null) {
+            return;
+        }
+        cameraButton.setEnabled(!busy);
+        cameraButton.setAlpha(busy ? 0.55f : 1f);
     }
 
     private void observeViewModel() {
@@ -257,7 +406,7 @@ public class MainActivity extends AppCompatActivity {
         cameraButton.setCompatElevation(dp(18));
         cameraButton.setElevation(dp(18));
         cameraButton.setTranslationZ(dp(18));
-        cameraButton.setOnClickListener(v -> startActivity(new Intent(this, CameraCaptureActivity.class)));
+        cameraButton.setOnClickListener(v -> launchDocumentScanner());
         FrameLayout.LayoutParams cameraParams = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         cameraParams.setMargins(0, 0, 0, getNavigationBarHeight() + dp(61));
         root.addView(cameraButton, cameraParams);

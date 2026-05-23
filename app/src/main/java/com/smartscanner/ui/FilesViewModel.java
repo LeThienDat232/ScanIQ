@@ -2,6 +2,7 @@ package com.smartscanner.ui;
 
 import android.app.Application;
 import android.content.Context;
+import android.net.Uri;
 import android.os.Environment;
 import android.webkit.MimeTypeMap;
 
@@ -135,6 +136,27 @@ public class FilesViewModel extends AndroidViewModel {
         repository.insertDocument(document, documentId -> {
             Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
             ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+        });
+    }
+
+    public void insertScannedDocument(@Nullable Integer folderId,
+                                      String title,
+                                      String filePath,
+                                      String fileType,
+                                      @Nullable List<Uri> pageImageUris,
+                                      @Nullable DocumentRepository.LongCallback callback) {
+        Document document = new Document(folderId, title, filePath, fileType, System.currentTimeMillis());
+        List<Uri> scannerPageUris = pageImageUris == null ? new ArrayList<>() : new ArrayList<>(pageImageUris);
+        repository.insertDocument(document, documentId -> {
+            Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
+            if (scannerPageUris.isEmpty()) {
+                ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+            } else {
+                ImageTextIndexer.indexImageUrisIntoDocument(getApplication(), repository, (int) documentId, scannerPageUris);
+            }
+            if (callback != null) {
+                callback.onResult(documentId);
+            }
         });
     }
 
