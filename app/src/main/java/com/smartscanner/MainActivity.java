@@ -94,6 +94,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_NAME = "smart_scanner_options";
     private static final String PREF_THEME = "theme";
     private static final String PREF_LANGUAGE = "language";
+    private static final String PREF_PERMISSIONS_REQUESTED = "permissions_requested";
     private static final String THEME_LIGHT = "light";
     private static final String THEME_DARK = "dark";
     private static final String LANGUAGE_EN = "en";
@@ -122,6 +123,7 @@ public class MainActivity extends AppCompatActivity {
     private ActivityResultLauncher<String> filePickerLauncher;
     private ActivityResultLauncher<String> imagePickerLauncher;
     private ActivityResultLauncher<IntentSenderRequest> documentScannerLauncher;
+    private ActivityResultLauncher<String[]> permissionRequestLauncher;
 
     private BottomTab selectedTab = BottomTab.HOME;
     private boolean showingDownloads = false;
@@ -162,8 +164,8 @@ public class MainActivity extends AppCompatActivity {
 
         viewModel = new ViewModelProvider(this).get(FilesViewModel.class);
 
-        requestStoragePermission();
         setupActivityResultLaunchers();
+        showPermissionRequestDialog();
         buildRootUi();
         observeViewModel();
         renderCurrentTab();
@@ -203,6 +205,11 @@ public class MainActivity extends AppCompatActivity {
                         handleFileImport(uri);
                     }
                 }
+        );
+
+        permissionRequestLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                permissions -> handlePermissionResults(permissions)
         );
     }
 
@@ -363,6 +370,101 @@ public class MainActivity extends AppCompatActivity {
             cachedSearchResults = safeDocumentList(documents);
             updateSearchPopup();
         });
+    }
+
+    private void showPermissionRequestDialog() {
+        boolean permissionsRequested = optionsPrefs.getBoolean(PREF_PERMISSIONS_REQUESTED, false);
+        if (permissionsRequested) {
+            return;
+        }
+
+        String message = tr("Permissions", "Quyền ứng dụng") + "\n\n" +
+                tr("SmartScanner needs the following permissions to work properly:", "SmartScanner cần các quyền sau để hoạt động bình thường:") + "\n\n" +
+                "• " + tr("Camera", "Máy ảnh") + ": " + tr("To scan documents", "Để quét tài liệu") + "\n" +
+                "• " + tr("Storage", "Bộ nhớ") + ": " + tr("To save and import files", "Để lưu và nhập tệp") + "\n" +
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ?
+                    "• " + tr("Notifications", "Thông báo") + ": " + tr("For background processing updates", "Để cập nhật xử lý nền") : "");
+
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Enable Permissions", "Bật quyền"))
+                .setMessage(message)
+                .setPositiveButton(tr("Enable", "Bật"), (dialog, which) -> requestAllPermissions())
+                .setNegativeButton(tr("Later", "Sau"), (dialog, which) -> {
+                    dialog.dismiss();
+                    markPermissionsRequested();
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private void requestAllPermissions() {
+        List<String> permissionsToRequest = new ArrayList<>();
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.CAMERA);
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED &&
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+
+        if (!permissionsToRequest.isEmpty()) {
+            permissionRequestLauncher.launch(permissionsToRequest.toArray(new String[0]));
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            requestStoragePermission();
+        }
+
+        markPermissionsRequested();
+    }
+
+    private void handlePermissionResults(Map<String, Boolean> permissions) {
+        StringBuilder grantedPermissions = new StringBuilder();
+        StringBuilder deniedPermissions = new StringBuilder();
+
+        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
+            if (entry.getValue()) {
+                grantedPermissions.append("\n✓ ").append(permissionDisplayName(entry.getKey()));
+            } else {
+                deniedPermissions.append("\n✗ ").append(permissionDisplayName(entry.getKey()));
+            }
+        }
+
+        if (deniedPermissions.length() > 0) {
+            String message = tr("Some permissions were denied:", "Một số quyền bị từ chối:") + deniedPermissions.toString() +
+                    "\n\n" + tr("You can enable them later in app settings.", "Bạn có thể bật chúng sau trong cài đặt ứng dụng.");
+
+            new AlertDialog.Builder(this)
+                    .setTitle(tr("Permissions", "Quyền ứng dụng"))
+                    .setMessage(message)
+                    .setPositiveButton(tr("OK", "OK"), (dialog, which) -> dialog.dismiss())
+                    .show();
+        }
+    }
+
+    private String permissionDisplayName(String permission) {
+        switch (permission) {
+            case Manifest.permission.CAMERA:
+                return tr("Camera", "Máy ảnh");
+            case Manifest.permission.READ_EXTERNAL_STORAGE:
+            case Manifest.permission.MANAGE_EXTERNAL_STORAGE:
+                return tr("Storage", "Bộ nhớ");
+            case Manifest.permission.POST_NOTIFICATIONS:
+                return tr("Notifications", "Thông báo");
+            default:
+                return permission;
+        }
+    }
+
+    private void markPermissionsRequested() {
+        optionsPrefs.edit().putBoolean(PREF_PERMISSIONS_REQUESTED, true).apply();
     }
 
     private void requestStoragePermission() {
