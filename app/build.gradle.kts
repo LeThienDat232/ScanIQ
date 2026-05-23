@@ -70,6 +70,9 @@ dependencies {
     implementation(libs.mlkit.text.recognition)
     implementation(libs.mlkit.document.scanner)
 
+    // PDFBox-Android for searchable PDF export
+    implementation(libs.pdfbox.android)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

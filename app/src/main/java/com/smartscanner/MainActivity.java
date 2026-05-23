@@ -77,6 +77,7 @@ import com.smartscanner.ui.CameraCaptureActivity;
 import com.smartscanner.ui.FilesViewModel;
 import com.smartscanner.ui.TextSummarizerActivity;
 import com.smartscanner.util.ImageFilters;
+import com.smartscanner.util.SearchablePdfExporter;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -2371,13 +2372,32 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void convertImagesToPdf(List<Document> selectedDocuments, String pdfName) {
+        runOnUiThread(() -> Toast.makeText(this,
+                tr("Building searchable PDF...", "Đang tạo PDF tìm kiếm được..."),
+                Toast.LENGTH_SHORT).show());
         DocumentRepository.DATABASE_EXECUTOR.execute(() -> {
             List<Uri> uris = new ArrayList<>();
             for (Document document : selectedDocuments) {
                 uris.add(Uri.fromFile(new File(document.filePath)));
             }
 
-            String path = FileStorageManager.convertImagesToPdf(this, uris, pdfName);
+            String path = null;
+            try {
+                String baseName = pdfName.toLowerCase(Locale.US).endsWith(".pdf") ? pdfName : pdfName + ".pdf";
+                File outputFile = new File(getFilesDir(), baseName);
+                int counter = 1;
+                while (outputFile.exists()) {
+                    String stem = baseName.substring(0, baseName.length() - 4);
+                    outputFile = new File(getFilesDir(), stem + "(" + counter + ").pdf");
+                    counter++;
+                }
+                path = SearchablePdfExporter.exportFromImageUris(this, uris, outputFile);
+            } catch (Exception e) {
+                Log.w(TAG, "Searchable PDF export failed; falling back to image-only", e);
+            }
+            if (path == null) {
+                path = FileStorageManager.convertImagesToPdf(this, uris, pdfName);
+            }
             if (path != null) {
                 File file = new File(path);
                 viewModel.insertDocument(null, file.getName(), path, "application/pdf");
