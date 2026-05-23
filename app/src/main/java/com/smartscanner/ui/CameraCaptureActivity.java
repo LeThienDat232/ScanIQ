@@ -29,6 +29,7 @@ import com.smartscanner.data.AppDatabase;
 import com.smartscanner.data.Document;
 import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
+import com.smartscanner.data.ImageTextIndexer;
 import com.smartscanner.databinding.ActivityCameraCaptureBinding;
 
 import java.io.File;
@@ -215,11 +216,11 @@ public class CameraCaptureActivity extends AppCompatActivity {
 
                 String actualFileName = new File(filePath).getName();
                 AppDatabase database = AppDatabase.getDatabase(this);
-                DocumentRepository repository = new DocumentRepository(database.documentDao(), database.folderDao());
+                DocumentRepository repository = new DocumentRepository(database, database.documentDao(), database.folderDao());
                 Document newDocument = new Document(null, actualFileName, filePath, "image/jpeg", timestamp);
-                repository.insertDocument(newDocument);
-
-                runOnUiThread(() -> {
+                repository.insertDocument(newDocument, documentId -> {
+                    Document savedDocument = new Document((int) documentId, null, actualFileName, filePath, "image/jpeg", null, timestamp);
+                    ImageTextIndexer.indexIfNeeded(getApplicationContext(), repository, savedDocument);
                     Toast.makeText(
                             CameraCaptureActivity.this,
                             "Document saved: " + actualFileName,

@@ -2,6 +2,7 @@ package com.smartscanner.ui;
 
 import android.app.Application;
 import android.content.Context;
+import android.net.Uri;
 import android.os.Environment;
 import android.webkit.MimeTypeMap;
 
@@ -17,6 +18,7 @@ import com.smartscanner.data.Document;
 import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
 import com.smartscanner.data.Folder;
+import com.smartscanner.data.ImageTextIndexer;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -40,12 +42,13 @@ public class FilesViewModel extends AndroidViewModel {
     public FilesViewModel(@NonNull Application application) {
         super(application);
         AppDatabase database = AppDatabase.getDatabase(application);
-        repository = new DocumentRepository(database.documentDao(), database.folderDao());
+        repository = new DocumentRepository(database, database.documentDao(), database.folderDao());
         folders = repository.getAllFolders();
         databaseDocuments = repository.getAllDocuments();
 
         recentDocuments.addSource(databaseDocuments, documents -> {
             latestDatabaseDocuments = safeList(documents);
+            scheduleImageTextIndexing(latestDatabaseDocuments);
             rebuildRecentDocuments();
             rebuildSearchResults();
         });
@@ -57,6 +60,7 @@ public class FilesViewModel extends AndroidViewModel {
 
         searchResults.addSource(databaseDocuments, documents -> {
             latestDatabaseDocuments = safeList(documents);
+            scheduleImageTextIndexing(latestDatabaseDocuments);
             rebuildSearchResults();
         });
         searchResults.addSource(downloadFiles, documents -> {
@@ -129,7 +133,35 @@ public class FilesViewModel extends AndroidViewModel {
 
     public void insertDocument(@Nullable Integer folderId, String title, String filePath, String fileType) {
         Document document = new Document(folderId, title, filePath, fileType, System.currentTimeMillis());
-        repository.insertDocument(document);
+        repository.insertDocument(document, documentId -> {
+            Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
+            ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+        });
+    }
+
+    public void insertScannedDocument(@Nullable Integer folderId,
+                                      String title,
+                                      String filePath,
+                                      String fileType,
+                                      @Nullable List<Uri> pageImageUris,
+                                      @Nullable DocumentRepository.LongCallback callback) {
+        Document document = new Document(folderId, title, filePath, fileType, System.currentTimeMillis());
+        List<Uri> scannerPageUris = pageImageUris == null ? new ArrayList<>() : new ArrayList<>(pageImageUris);
+        repository.insertDocument(document, documentId -> {
+            Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
+            if (scannerPageUris.isEmpty()) {
+                ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+            } else {
+                ImageTextIndexer.indexImageUrisIntoDocument(getApplication(), repository, (int) documentId, scannerPageUris);
+            }
+            if (callback != null) {
+                callback.onResult(documentId);
+            }
+        });
+    }
+
+    public void updateDocumentOcrText(int documentId, @Nullable String ocrText) {
+        repository.updateDocumentOcrText(documentId, ocrText);
     }
 
     public void createFolder(String name, @Nullable Integer parentFolderId) {
@@ -156,19 +188,28 @@ public class FilesViewModel extends AndroidViewModel {
     }
 
     public void moveItemsToFolder(List<Object> items, @Nullable Integer targetFolderId) {
+        moveItemsToFolder(items, targetFolderId, null);
+    }
+
+    public void moveItemsToFolder(List<Object> items,
+                                  @Nullable Integer targetFolderId,
+                                  @Nullable DocumentRepository.MoveCallback callback) {
+        List<Document> documents = new ArrayList<>();
+        List<Folder> folders = new ArrayList<>();
         for (Object item : items) {
             if (item instanceof Document) {
                 Document document = (Document) item;
                 if (!Objects.equals(document.folderId, -1)) {
-                    repository.updateDocument(document.copyWithFolderId(targetFolderId));
+                    documents.add(document);
                 }
             } else if (item instanceof Folder) {
                 Folder folder = (Folder) item;
                 if (!Objects.equals(folder.id, targetFolderId)) {
-                    repository.updateFolder(folder.copyWithParent(targetFolderId));
+                    folders.add(folder);
                 }
             }
         }
+        repository.moveItemsToFolder(documents, folders, targetFolderId, callback);
     }
 
     public void unfoldFolders(List<Folder> foldersToUnfold) {
@@ -253,6 +294,12 @@ public class FilesViewModel extends AndroidViewModel {
         }
         matches.sort(Comparator.comparingLong((Document document) -> document.createdAt).reversed());
         searchResults.setValue(matches);
+    }
+
+    private void scheduleImageTextIndexing(List<Document> documents) {
+        for (Document document : documents) {
+            ImageTextIndexer.indexIfNeeded(getApplication(), repository, document);
+        }
     }
 
     private String makeUniqueFolderName(String baseName,
