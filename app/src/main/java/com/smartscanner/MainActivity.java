@@ -912,6 +912,18 @@ public class MainActivity extends AppCompatActivity {
                 tr("Camera, storage, and notifications used by SmartScanner.", "Máy ảnh, bộ nhớ và thông báo mà SmartScanner sử dụng."),
                 v -> showPermissionsDialog()
         ));
+        container.addView(createOptionRow(
+                tr("Privacy Policy", "Chính sách bảo mật"),
+                tr("View", "Xem"),
+                tr("How SmartScanner handles your scans and data.", "SmartScanner xử lý bản quét và dữ liệu của bạn ra sao."),
+                v -> openPrivacyPolicy()
+        ));
+        container.addView(createOptionRow(
+                tr("About", "Giới thiệu"),
+                appVersionLabel(),
+                tr("App version and credits.", "Phiên bản và thông tin ứng dụng."),
+                v -> showAboutDialog()
+        ));
 
         contentContainer.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1030,6 +1042,35 @@ public class MainActivity extends AppCompatActivity {
                 .setNeutralButton(tr("Storage Access", "Quyền bộ nhớ"), (dialog, which) -> openStoragePermissionSettings())
                 .setNegativeButton(tr("Close", "Đóng"), null)
                 .show();
+    }
+
+    private void openPrivacyPolicy() {
+        String url = "https://lethiendat232.github.io/Smart_Scanner_UI/privacy.html";
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, tr("No browser available", "Không có trình duyệt"), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showAboutDialog() {
+        String message = tr(
+                "SmartScanner lets you scan documents, organize them in folders, extract text with OCR, merge images into PDFs, and summarize text.\n\nBuilt with Android, ML Kit, and Room.",
+                "SmartScanner giúp bạn quét tài liệu, sắp xếp vào thư mục, trích xuất chữ bằng OCR, gộp ảnh thành PDF và tóm tắt văn bản.\n\nXây dựng bằng Android, ML Kit và Room."
+        );
+        new AlertDialog.Builder(this)
+                .setTitle(tr("About SmartScanner", "Về SmartScanner"))
+                .setMessage(tr("Version ", "Phiên bản ") + appVersionLabel() + "\n\n" + message)
+                .setPositiveButton(tr("Close", "Đóng"), null)
+                .show();
+    }
+
+    private String appVersionLabel() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "1.0";
+        }
     }
 
     private void setThemePreference(String theme) {
