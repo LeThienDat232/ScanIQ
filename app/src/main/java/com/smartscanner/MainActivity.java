@@ -76,6 +76,7 @@ import com.smartscanner.data.Folder;
 import com.smartscanner.ui.CameraCaptureActivity;
 import com.smartscanner.ui.FilesViewModel;
 import com.smartscanner.ui.TextSummarizerActivity;
+import com.smartscanner.util.ImageFilters;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -1994,26 +1995,36 @@ public class MainActivity extends AppCompatActivity {
     private void showItemActions(Object item) {
         if (item instanceof Document) {
             Document document = (Document) item;
-            String[] actions = {
-                    tr("Open", "Mở"),
-                    tr("Select", "Chọn"),
-                    tr("Rename", "Đổi tên"),
-                    tr("Delete", "Xóa"),
-                    tr("Share", "Chia sẻ")
-            };
+            boolean isImage = document.fileType != null
+                    && document.fileType.toLowerCase(Locale.US).contains("image");
+
+            List<String> actionList = new ArrayList<>();
+            actionList.add(tr("Open", "Mở"));
+            actionList.add(tr("Select", "Chọn"));
+            actionList.add(tr("Rename", "Đổi tên"));
+            if (isImage) {
+                actionList.add(tr("Apply filter", "Áp dụng bộ lọc"));
+            }
+            actionList.add(tr("Delete", "Xóa"));
+            actionList.add(tr("Share", "Chia sẻ"));
+            String[] actions = actionList.toArray(new String[0]);
+
             new AlertDialog.Builder(this)
                     .setTitle(document.title)
                     .setItems(actions, (dialog, which) -> {
-                        if (which == 0) {
+                        String action = actions[which];
+                        if (action.equals(tr("Open", "Mở"))) {
                             openFile(document.filePath, document.fileType);
-                        } else if (which == 1) {
+                        } else if (action.equals(tr("Select", "Chọn"))) {
                             addSelectedItem(document);
                             refreshSelectionUi();
-                        } else if (which == 2) {
+                        } else if (action.equals(tr("Rename", "Đổi tên"))) {
                             showRenameDialog(document);
-                        } else if (which == 3) {
+                        } else if (action.equals(tr("Apply filter", "Áp dụng bộ lọc"))) {
+                            showFilterDialog(document);
+                        } else if (action.equals(tr("Delete", "Xóa"))) {
                             deleteItem(document);
-                        } else if (which == 4) {
+                        } else if (action.equals(tr("Share", "Chia sẻ"))) {
                             shareDocuments(singleDocumentList(document));
                         }
                     })
@@ -2044,6 +2055,35 @@ public class MainActivity extends AppCompatActivity {
                     })
                     .show();
         }
+    }
+
+    private void showFilterDialog(Document document) {
+        String[] labels = {
+                tr("Grayscale", "Xám"),
+                tr("Black & White", "Đen trắng"),
+                tr("Remove Shadow", "Khử bóng")
+        };
+        ImageFilters.FilterType[] types = {
+                ImageFilters.FilterType.GRAYSCALE,
+                ImageFilters.FilterType.BLACK_AND_WHITE,
+                ImageFilters.FilterType.SHADOW_REMOVED
+        };
+        String[] suffixes = {"grayscale", "bw", "noshadow"};
+
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Apply filter", "Áp dụng bộ lọc"))
+                .setItems(labels, (dialog, which) -> {
+                    Toast.makeText(this, tr("Applying filter...", "Đang áp dụng bộ lọc..."), Toast.LENGTH_SHORT).show();
+                    viewModel.applyImageFilter(this, document, types[which], suffixes[which], success -> {
+                        Toast.makeText(this,
+                                success
+                                        ? tr("Filter applied", "Đã áp dụng bộ lọc")
+                                        : tr("Failed to apply filter", "Áp dụng bộ lọc thất bại"),
+                                Toast.LENGTH_SHORT).show();
+                    });
+                })
+                .setNegativeButton(tr("Cancel", "Hủy"), null)
+                .show();
     }
 
     private void showRenameDialog(Object item) {

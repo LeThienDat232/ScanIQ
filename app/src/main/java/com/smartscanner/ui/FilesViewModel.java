@@ -19,6 +19,10 @@ import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
 import com.smartscanner.data.Folder;
 import com.smartscanner.data.ImageTextIndexer;
+import com.smartscanner.util.ImageFilters;
+
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -162,6 +166,61 @@ public class FilesViewModel extends AndroidViewModel {
 
     public void updateDocumentOcrText(int documentId, @Nullable String ocrText) {
         repository.updateDocumentOcrText(documentId, ocrText);
+    }
+
+    public interface FilterCallback {
+        void onResult(boolean success);
+    }
+
+    public void applyImageFilter(Context context,
+                                 Document document,
+                                 ImageFilters.FilterType filterType,
+                                 String filterSuffix,
+                                 @Nullable FilterCallback callback) {
+        repository.runInBackground(() -> {
+            boolean success = false;
+            try {
+                Bitmap source = BitmapFactory.decodeFile(document.filePath);
+                if (source == null) {
+                    return;
+                }
+
+                Bitmap filtered = ImageFilters.apply(source, filterType);
+                if (filtered != source) {
+                    source.recycle();
+                }
+
+                String baseName = document.title;
+                int dot = baseName.lastIndexOf('.');
+                if (dot > 0) {
+                    baseName = baseName.substring(0, dot);
+                }
+                String fileName = baseName + "_" + filterSuffix + ".jpg";
+
+                String savedPath = FileStorageManager.saveImageToInternalStorage(context, filtered, fileName);
+                filtered.recycle();
+                if (savedPath == null) {
+                    return;
+                }
+
+                Integer targetFolderId = Objects.equals(document.folderId, -1) ? null : document.folderId;
+                File savedFile = new File(savedPath);
+                repository.insertDocument(new Document(
+                        targetFolderId,
+                        savedFile.getName(),
+                        savedPath,
+                        "image/jpeg",
+                        System.currentTimeMillis()
+                ));
+                success = true;
+            } finally {
+                if (callback != null) {
+                    boolean finalSuccess = success;
+                    new android.os.Handler(android.os.Looper.getMainLooper())
+                            .post(() -> callback.onResult(finalSuccess));
+                }
+            }
+        });
     }
 
     public void createFolder(String name, @Nullable Integer parentFolderId) {
