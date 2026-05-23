@@ -99,6 +99,11 @@ public class DocumentRepository {
         DATABASE_EXECUTOR.execute(() -> documentDao.updateDocumentOcrText(documentId, ocrText));
     }
 
+    @Nullable
+    public String getDocumentOcrTextSnapshot(int documentId) {
+        return documentDao.getDocumentOcrText(documentId);
+    }
+
     public void updateFolder(Folder folder) {
         DATABASE_EXECUTOR.execute(() -> folderDao.updateFolder(folder));
     }

@@ -302,6 +302,7 @@ public class MainActivity extends AppCompatActivity {
                     if (selectedTab == BottomTab.FILES) {
                         renderCurrentTab();
                     }
+                    offerPostScanSummarize((int) documentId);
                 }
         ));
     }
@@ -2039,12 +2040,17 @@ public class MainActivity extends AppCompatActivity {
             boolean isImage = document.fileType != null
                     && document.fileType.toLowerCase(Locale.US).contains("image");
 
+            boolean hasOcrText = document.ocrText != null && !document.ocrText.trim().isEmpty();
+
             List<String> actionList = new ArrayList<>();
             actionList.add(tr("Open", "Mở"));
             actionList.add(tr("Select", "Chọn"));
             actionList.add(tr("Rename", "Đổi tên"));
             if (isImage) {
                 actionList.add(tr("Apply filter", "Áp dụng bộ lọc"));
+            }
+            if (hasOcrText) {
+                actionList.add(tr("Summarize", "Tóm tắt"));
             }
             actionList.add(tr("Delete", "Xóa"));
             actionList.add(tr("Share", "Chia sẻ"));
@@ -2063,6 +2069,8 @@ public class MainActivity extends AppCompatActivity {
                             showRenameDialog(document);
                         } else if (action.equals(tr("Apply filter", "Áp dụng bộ lọc"))) {
                             showFilterDialog(document);
+                        } else if (action.equals(tr("Summarize", "Tóm tắt"))) {
+                            openSummarizerWithText(document.ocrText);
                         } else if (action.equals(tr("Delete", "Xóa"))) {
                             deleteItem(document);
                         } else if (action.equals(tr("Share", "Chia sẻ"))) {
@@ -2096,6 +2104,42 @@ public class MainActivity extends AppCompatActivity {
                     })
                     .show();
         }
+    }
+
+    private void openSummarizerWithText(String text) {
+        Intent intent = new Intent(this, TextSummarizerActivity.class);
+        intent.putExtra(TextSummarizerActivity.EXTRA_INPUT_TEXT, text);
+        startActivity(intent);
+    }
+
+    private void offerPostScanSummarize(int documentId) {
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Summarize this scan?", "Tóm tắt bản quét này?"))
+                .setMessage(tr(
+                        "We'll extract text from the scanned pages and send it to the summarizer.",
+                        "Chúng tôi sẽ trích xuất chữ từ các trang đã quét và gửi tới bộ tóm tắt."))
+                .setPositiveButton(tr("Summarize", "Tóm tắt"), (dialog, which) -> waitForOcrThenSummarize(documentId, 0))
+                .setNegativeButton(tr("Not now", "Để sau"), null)
+                .show();
+    }
+
+    private void waitForOcrThenSummarize(int documentId, int attempt) {
+        DocumentRepository.DATABASE_EXECUTOR.execute(() -> {
+            String ocrText = viewModel.getDocumentOcrTextSnapshot(documentId);
+            runOnUiThread(() -> {
+                if (ocrText != null && !ocrText.trim().isEmpty()) {
+                    openSummarizerWithText(ocrText);
+                } else if (attempt < 10) {
+                    new android.os.Handler(android.os.Looper.getMainLooper())
+                            .postDelayed(() -> waitForOcrThenSummarize(documentId, attempt + 1), 800);
+                } else {
+                    Toast.makeText(this,
+                            tr("OCR still running — try Summarize from the document menu in a moment.",
+                                    "OCR vẫn đang chạy — hãy thử Tóm tắt từ menu tài liệu sau ít phút."),
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        });
     }
 
     private void showFilterDialog(Document document) {

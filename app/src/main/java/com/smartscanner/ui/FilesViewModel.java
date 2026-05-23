@@ -168,6 +168,11 @@ public class FilesViewModel extends AndroidViewModel {
         repository.updateDocumentOcrText(documentId, ocrText);
     }
 
+    @Nullable
+    public String getDocumentOcrTextSnapshot(int documentId) {
+        return repository.getDocumentOcrTextSnapshot(documentId);
+    }
+
     public interface FilterCallback {
         void onResult(boolean success);
     }

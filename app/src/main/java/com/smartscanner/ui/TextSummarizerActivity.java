@@ -29,6 +29,8 @@ import com.smartscanner.service.SummarizerResultStore;
 import com.smartscanner.service.SummarizerService;
 
 public class TextSummarizerActivity extends AppCompatActivity {
+    public static final String EXTRA_INPUT_TEXT = "com.smartscanner.EXTRA_INPUT_TEXT";
+
     private ActivityTextSummarizerBinding binding;
     private ActivityResultLauncher<String> requestPermissionLauncher;
 
@@ -75,6 +77,15 @@ public class TextSummarizerActivity extends AppCompatActivity {
         setupToolbar();
         setupListeners();
         hideSummary();
+
+        Intent intent = getIntent();
+        if (intent != null) {
+            String prefill = intent.getStringExtra(EXTRA_INPUT_TEXT);
+            if (prefill != null && !prefill.isEmpty()) {
+                binding.etInputText.setText(prefill);
+                binding.etInputText.setSelection(binding.etInputText.getText().length());
+            }
+        }
     }
 
     @Override
