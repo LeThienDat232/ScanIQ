@@ -28,8 +28,12 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.text.Editable;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.StyleSpan;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.DragEvent;
@@ -1222,6 +1226,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private View createDocumentRow(Document document) {
+        return createDocumentRow(document, null);
+    }
+
+    private View createDocumentRow(Document document, @Nullable String matchQuery) {
         MaterialCardView card = new MaterialCardView(this);
         card.setRadius(dp(10));
         card.setCardElevation(0);
@@ -1255,8 +1263,14 @@ public class MainActivity extends AppCompatActivity {
         textColumn.setOrientation(LinearLayout.VERTICAL);
         textColumn.setPadding(dp(12), 0, 0, 0);
 
+        boolean hasQuery = matchQuery != null && !matchQuery.trim().isEmpty();
+
         TextView title = new TextView(this);
-        title.setText(document.title);
+        if (hasQuery) {
+            title.setText(highlightMatches(document.title, matchQuery));
+        } else {
+            title.setText(document.title);
+        }
         title.setTextColor(textPrimary());
         title.setTextSize(16);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1270,9 +1284,77 @@ public class MainActivity extends AppCompatActivity {
         date.setTextColor(textMuted());
         textColumn.addView(date);
 
+        if (hasQuery) {
+            CharSequence snippet = buildMatchSnippet(document.ocrText, matchQuery);
+            if (snippet != null) {
+                TextView snippetView = new TextView(this);
+                snippetView.setText(snippet);
+                snippetView.setTextSize(12);
+                snippetView.setTextColor(textPrimary());
+                snippetView.setMaxLines(2);
+                snippetView.setEllipsize(TextUtils.TruncateAt.END);
+                LinearLayout.LayoutParams snippetParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                snippetParams.setMargins(0, dp(2), 0, 0);
+                textColumn.addView(snippetView, snippetParams);
+            }
+        }
+
         row.addView(textColumn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         card.addView(row);
         return card;
+    }
+
+    private CharSequence highlightMatches(String source, String query) {
+        SpannableStringBuilder builder = new SpannableStringBuilder(source);
+        applyMatchSpans(builder, source, query, 0);
+        return builder;
+    }
+
+    @Nullable
+    private CharSequence buildMatchSnippet(@Nullable String ocrText, String query) {
+        if (ocrText == null || ocrText.isEmpty()) {
+            return null;
+        }
+        String lowerText = ocrText.toLowerCase(Locale.US);
+        String lowerQuery = query.toLowerCase(Locale.US);
+        int matchIndex = lowerText.indexOf(lowerQuery);
+        if (matchIndex < 0) {
+            return null;
+        }
+
+        int contextChars = 40;
+        int start = Math.max(0, matchIndex - contextChars);
+        int end = Math.min(ocrText.length(), matchIndex + query.length() + contextChars);
+        String prefix = start > 0 ? "…" : "";
+        String suffix = end < ocrText.length() ? "…" : "";
+        String windowText = ocrText.substring(start, end).replace('\n', ' ').replaceAll("\\s+", " ").trim();
+
+        SpannableStringBuilder builder = new SpannableStringBuilder(prefix + windowText + suffix);
+        applyMatchSpans(builder, builder.toString(), query, 0);
+        return builder;
+    }
+
+    private void applyMatchSpans(SpannableStringBuilder builder, String haystack, String query, int fromIndex) {
+        String lowerHaystack = haystack.toLowerCase(Locale.US);
+        String lowerQuery = query.toLowerCase(Locale.US);
+        int searchFrom = fromIndex;
+        while (searchFrom <= lowerHaystack.length()) {
+            int hit = lowerHaystack.indexOf(lowerQuery, searchFrom);
+            if (hit < 0) {
+                break;
+            }
+            int hitEnd = hit + query.length();
+            builder.setSpan(new StyleSpan(Typeface.BOLD), hit, hitEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            builder.setSpan(new BackgroundColorSpan(matchHighlightColor()), hit, hitEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            searchFrom = hitEnd;
+        }
+    }
+
+    private int matchHighlightColor() {
+        return isDarkTheme() ? Color.argb(120, 93, 142, 255) : Color.argb(90, 255, 224, 130);
     }
 
     private MaterialCardView createExplorerCard(ExplorerItem item) {
@@ -2515,9 +2597,10 @@ public class MainActivity extends AppCompatActivity {
             searchPopupContent.addView(empty);
         } else {
             int limit = Math.min(8, cachedSearchResults.size());
+            String currentQuery = viewModel.getSearchQueryValue();
             for (int i = 0; i < limit; i++) {
                 Document document = cachedSearchResults.get(i);
-                View row = createDocumentRow(document);
+                View row = createDocumentRow(document, currentQuery);
                 row.setOnClickListener(v -> {
                     viewModel.setSearchQuery("");
                     openFile(document.filePath, document.fileType);
