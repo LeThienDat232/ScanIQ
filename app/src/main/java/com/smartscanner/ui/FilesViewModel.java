@@ -19,6 +19,7 @@ import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
 import com.smartscanner.data.Folder;
 import com.smartscanner.data.ImageTextIndexer;
+import com.smartscanner.data.PdfTextIndexer;
 import com.smartscanner.util.ImageFilters;
 
 import android.graphics.Bitmap;
@@ -140,6 +141,7 @@ public class FilesViewModel extends AndroidViewModel {
         repository.insertDocument(document, documentId -> {
             Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
             ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+            PdfTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
         });
     }
 
@@ -155,6 +157,7 @@ public class FilesViewModel extends AndroidViewModel {
             Document savedDocument = new Document((int) documentId, folderId, title, filePath, fileType, null, document.createdAt);
             if (scannerPageUris.isEmpty()) {
                 ImageTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
+                PdfTextIndexer.indexIfNeeded(getApplication(), repository, savedDocument);
             } else {
                 ImageTextIndexer.indexImageUrisIntoDocument(getApplication(), repository, (int) documentId, scannerPageUris);
             }
@@ -363,6 +366,7 @@ public class FilesViewModel extends AndroidViewModel {
     private void scheduleImageTextIndexing(List<Document> documents) {
         for (Document document : documents) {
             ImageTextIndexer.indexIfNeeded(getApplication(), repository, document);
+            PdfTextIndexer.indexIfNeeded(getApplication(), repository, document);
         }
     }
 
