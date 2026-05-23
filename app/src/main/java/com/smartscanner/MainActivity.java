@@ -1051,7 +1051,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void openPrivacyPolicy() {
-        String url = "https://lethiendat232.github.io/Smart_Scanner_UI/privacy.html";
+        String url = "https://github.com/LeThienDat232/Smart_Scanner_UI/blob/main/docs/privacy.md";
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         } catch (Exception e) {
