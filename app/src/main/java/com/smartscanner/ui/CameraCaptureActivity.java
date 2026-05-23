@@ -7,7 +7,6 @@ import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.View;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -20,12 +19,17 @@ import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.smartscanner.data.AppDatabase;
 import com.smartscanner.data.Document;
 import com.smartscanner.data.DocumentRepository;
 import com.smartscanner.data.FileStorageManager;
+import com.smartscanner.data.ImageTextIndexer;
 import com.smartscanner.databinding.ActivityCameraCaptureBinding;
 
 import java.io.File;
@@ -42,17 +46,18 @@ public class CameraCaptureActivity extends AppCompatActivity {
     private ImageCapture imageCapture;
     private ExecutorService cameraExecutor;
 
-    private boolean isScanModeOn = false;
     private int lensFacing = CameraSelector.LENS_FACING_BACK;
     private int flashMode = ImageCapture.FLASH_MODE_OFF;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         binding = ActivityCameraCaptureBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
         cameraExecutor = Executors.newSingleThreadExecutor();
+        applySystemBarInsets();
 
         if (allPermissionsGranted()) {
             startCamera();
@@ -65,12 +70,6 @@ public class CameraCaptureActivity extends AppCompatActivity {
 
     private void setupUi() {
         binding.btnBack.setOnClickListener(v -> finish());
-
-        binding.btnToggleScan.setOnClickListener(v -> {
-            isScanModeOn = !isScanModeOn;
-            binding.btnToggleScan.setText(isScanModeOn ? "Scan Mode: ON" : "Scan Mode: OFF");
-            binding.scanOverlay.setVisibility(isScanModeOn ? View.VISIBLE : View.GONE);
-        });
 
         binding.btnCapture.setOnClickListener(v -> takePhoto());
 
@@ -94,6 +93,40 @@ public class CameraCaptureActivity extends AppCompatActivity {
                     : CameraSelector.LENS_FACING_FRONT;
             startCamera();
         });
+    }
+
+    private void applySystemBarInsets() {
+        int topPaddingLeft = binding.topPanel.getPaddingLeft();
+        int topPaddingTop = binding.topPanel.getPaddingTop();
+        int topPaddingRight = binding.topPanel.getPaddingRight();
+        int topPaddingBottom = binding.topPanel.getPaddingBottom();
+
+        int bottomPaddingLeft = binding.bottomPanel.getPaddingLeft();
+        int bottomPaddingTop = binding.bottomPanel.getPaddingTop();
+        int bottomPaddingRight = binding.bottomPanel.getPaddingRight();
+        int bottomPaddingBottom = binding.bottomPanel.getPaddingBottom();
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.getRoot(), (view, windowInsets) -> {
+            Insets insets = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
+            );
+
+            binding.topPanel.setPadding(
+                    topPaddingLeft,
+                    topPaddingTop + insets.top,
+                    topPaddingRight,
+                    topPaddingBottom
+            );
+            binding.bottomPanel.setPadding(
+                    bottomPaddingLeft,
+                    bottomPaddingTop,
+                    bottomPaddingRight,
+                    bottomPaddingBottom + insets.bottom
+            );
+
+            return windowInsets;
+        });
+        ViewCompat.requestApplyInsets(binding.getRoot());
     }
 
     private void startCamera() {
@@ -183,11 +216,11 @@ public class CameraCaptureActivity extends AppCompatActivity {
 
                 String actualFileName = new File(filePath).getName();
                 AppDatabase database = AppDatabase.getDatabase(this);
-                DocumentRepository repository = new DocumentRepository(database.documentDao(), database.folderDao());
+                DocumentRepository repository = new DocumentRepository(database, database.documentDao(), database.folderDao());
                 Document newDocument = new Document(null, actualFileName, filePath, "image/jpeg", timestamp);
-                repository.insertDocument(newDocument);
-
-                runOnUiThread(() -> {
+                repository.insertDocument(newDocument, documentId -> {
+                    Document savedDocument = new Document((int) documentId, null, actualFileName, filePath, "image/jpeg", null, timestamp);
+                    ImageTextIndexer.indexIfNeeded(getApplicationContext(), repository, savedDocument);
                     Toast.makeText(
                             CameraCaptureActivity.this,
                             "Document saved: " + actualFileName,

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="summarizer_accent">#5D8EFF</color>
+    <color name="summarizer_background">#12141A</color>
+    <color name="summarizer_appbar">#1F222B</color>
+    <color name="summarizer_surface">#1F222B</color>
+    <color name="summarizer_input_surface">#20242D</color>
+    <color name="summarizer_outline">#3E4350</color>
+    <color name="summarizer_text_primary">#F2F5F9</color>
+    <color name="summarizer_text_secondary">#A9B1C1</color>
+    <color name="summarizer_button_text">#FFFFFF</color>
+</resources>

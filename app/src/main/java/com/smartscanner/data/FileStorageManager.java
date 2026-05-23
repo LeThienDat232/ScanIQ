@@ -66,10 +66,19 @@ public final class FileStorageManager {
 
     @Nullable
     public static String saveFileFromUri(Context context, Uri uri) {
-        String originalName = getFileName(context, uri);
+        return saveFileFromUri(context, uri, null);
+    }
+
+    @Nullable
+    public static String saveFileFromUri(Context context, Uri uri, @Nullable String preferredFileName) {
+        String originalName = preferredFileName;
+        if (originalName == null || originalName.trim().isEmpty()) {
+            originalName = getFileName(context, uri);
+        }
         if (originalName == null || originalName.trim().isEmpty()) {
             originalName = "imported_" + System.currentTimeMillis();
         }
+        originalName = sanitizeFileName(originalName);
 
         String uniqueName = getUniqueFileName(context.getFilesDir(), originalName);
         File file = new File(context.getFilesDir(), uniqueName);
@@ -89,6 +98,14 @@ public final class FileStorageManager {
             Log.e(TAG, "Error saving file from Uri", e);
             return null;
         }
+    }
+
+    private static String sanitizeFileName(String fileName) {
+        String sanitized = fileName.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (sanitized.isEmpty()) {
+            return "imported_" + System.currentTimeMillis();
+        }
+        return sanitized;
     }
 
     @Nullable

@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -21,6 +23,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
+import com.smartscanner.R;
 import com.smartscanner.databinding.ActivityTextSummarizerBinding;
 import com.smartscanner.service.SummarizerResultStore;
 import com.smartscanner.service.SummarizerService;
@@ -50,6 +53,7 @@ public class TextSummarizerActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         binding = ActivityTextSummarizerBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
+        applyThemeChrome();
 
         requestPermissionLauncher = registerForActivityResult(
                 new ActivityResultContracts.RequestPermission(),
@@ -103,7 +107,37 @@ public class TextSummarizerActivity extends AppCompatActivity {
     }
 
     private void setupToolbar() {
+        Drawable navigationIcon = binding.toolbar.getNavigationIcon();
+        if (navigationIcon != null) {
+            navigationIcon.setTint(ContextCompat.getColor(this, R.color.summarizer_accent));
+        }
         binding.toolbar.setNavigationOnClickListener(v -> getOnBackPressedDispatcher().onBackPressed());
+    }
+
+    private void applyThemeChrome() {
+        int appBarColor = ContextCompat.getColor(this, R.color.summarizer_appbar);
+        int backgroundColor = ContextCompat.getColor(this, R.color.summarizer_background);
+        getWindow().setStatusBarColor(appBarColor);
+        getWindow().setNavigationBarColor(backgroundColor);
+
+        boolean isDarkMode = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (isDarkMode) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (isDarkMode) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+        }
+        getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
     private void setupListeners() {

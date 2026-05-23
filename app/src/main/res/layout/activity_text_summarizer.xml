@@ -4,28 +4,31 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FAFAFA"
+    android:background="@color/summarizer_background"
     android:fitsSystemWindows="true"
     tools:context=".ui.TextSummarizerActivity">
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@android:color/white">
+        android:background="@color/summarizer_appbar"
+        app:elevation="0dp">
 
         <androidx.appcompat.widget.Toolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
+            android:background="@color/summarizer_appbar"
             app:navigationIcon="@drawable/ic_back"
             app:title="Text Summarizer"
-            app:titleTextColor="#3367EF" />
+            app:titleTextColor="@color/summarizer_accent" />
 
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:background="@color/summarizer_background"
         android:fillViewport="true"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
@@ -42,7 +45,8 @@
                 android:layout_height="wrap_content"
                 app:cardCornerRadius="8dp"
                 app:cardElevation="2dp"
-                app:strokeColor="#E0E0E0"
+                app:cardBackgroundColor="@color/summarizer_input_surface"
+                app:strokeColor="@color/summarizer_outline"
                 app:strokeWidth="1dp">
 
                 <EditText
@@ -53,7 +57,10 @@
                     android:gravity="top"
                     android:hint="Enter or paste text to summarize..."
                     android:minLines="8"
-                    android:padding="16dp" />
+                    android:padding="16dp"
+                    android:textColor="@color/summarizer_text_primary"
+                    android:textColorHighlight="@color/summarizer_accent"
+                    android:textColorHint="@color/summarizer_text_secondary" />
 
             </com.google.android.material.card.MaterialCardView>
 
@@ -64,7 +71,8 @@
                 android:layout_marginTop="16dp"
                 android:text="Summarize Now"
                 android:textAllCaps="false"
-                app:backgroundTint="#3367EF"
+                android:textColor="@color/summarizer_button_text"
+                app:backgroundTint="@color/summarizer_accent"
                 app:cornerRadius="8dp" />
 
             <com.google.android.material.progressindicator.CircularProgressIndicator
@@ -75,7 +83,7 @@
                 android:layout_marginTop="16dp"
                 android:visibility="gone"
                 android:indeterminate="true"
-                app:indicatorColor="#3367EF" />
+                app:indicatorColor="@color/summarizer_accent" />
 
             <RelativeLayout
                 android:layout_width="match_parent"
@@ -87,7 +95,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Summary Result"
-                    android:textColor="#3367EF"
+                    android:textColor="@color/summarizer_accent"
                     android:textSize="18sp"
                     android:textStyle="bold" />
 
@@ -101,7 +109,7 @@
                     android:contentDescription="Copy summary"
                     android:src="@drawable/ic_copy"
                     android:visibility="gone"
-                    app:tint="#3367EF" />
+                    app:tint="@color/summarizer_accent" />
 
             </RelativeLayout>
 
@@ -113,7 +121,8 @@
                 android:visibility="gone"
                 app:cardCornerRadius="8dp"
                 app:cardElevation="2dp"
-                app:strokeColor="#E0E0E0"
+                app:cardBackgroundColor="@color/summarizer_surface"
+                app:strokeColor="@color/summarizer_outline"
                 app:strokeWidth="1dp">
 
                 <TextView
@@ -122,7 +131,7 @@
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="4sp"
                     android:padding="16dp"
-                    android:textColor="@android:color/black"
+                    android:textColor="@color/summarizer_text_primary"
                     android:textSize="16sp" />
 
             </com.google.android.material.card.MaterialCardView>
